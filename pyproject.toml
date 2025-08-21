@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "solaris-pointing"
+version = "0.1.0"
+description = "Solaris Observatory utilities under the 'solaris_pointing' namespace."
+authors = ["Marco Buttu <marco.buttu@inaf.it>"]
+readme = "README.md"
+license = "MIT"
+# Install everything under src/solaris_pointing as one distribution
+packages = [{ include = "solaris_pointing", from = "src" }]
+# Ensure PEP 561 markers are shipped for all typed subpackages
+include = ["src/solaris_pointing/**/py.typed"]
+keywords = ["telescope", "pointing", "offsets", "tsv"]
+
+[tool.poetry.dependencies]
+python = ">=3.11"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+hypothesis = "*"
+coverage = "*"
+ruff = "*"
+pytest-cov = "^6.2.1"
+tox = "^4.28.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,7 @@
+*__pycache__
+*.swp
+.coverage
+coverage.xml
+htmlcov
+.hypothesis
+.tox/

@@ -1,0 +1,9 @@
+[run]
+branch = True
+parallel = True
+concurrency = multiprocessing
+source = solaris_pointing
+
+[report]
+show_missing = True
+skip_covered = True
