@@ -5,3 +5,4 @@ coverage.xml
 htmlcov
 .hypothesis
 .tox/
+output_example*
