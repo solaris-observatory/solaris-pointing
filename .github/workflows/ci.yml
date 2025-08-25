@@ -61,3 +61,27 @@ jobs:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: ignore
+
+      - name: Ensure coverage.xml exists (for Coveralls)
+        run: |
+          if [ ! -f coverage.xml ]; then
+            poetry run pytest -q --cov=solaris_pointing --cov-report=xml:coverage.xml
+          fi
+
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: coverage.xml
+          format: cobertura
+          parallel: true
+
+  coveralls_finish:
+    name: Coveralls Finish
+    needs: tox
+    runs-on: ubuntu-latest
+    steps:
+      - name: Finalize Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          parallel-finished: true
