@@ -1,5 +1,5 @@
 # Solaris Pointing
-![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)[![Coverage Status](https://coveralls.io/repos/github/solaris-observatory/solaris-pointing/badge.svg?branch=fix-issue-7)]
 
 **Solaris Pointing** is a Python package designed to support the analysis and
 improvement of telescope pointing. It provides tools to record, store, and analyze
