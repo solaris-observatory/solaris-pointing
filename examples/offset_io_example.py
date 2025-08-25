@@ -76,9 +76,9 @@ rows.append(
         elevation_deg=45.789,
         offset_az_deg=0.0034,
         offset_el_deg=-0.0023,
-        temperature_c=None,     # will be written as "NaN"
-        pressure_hpa=None,      # will be written as "NaN"
-        humidity_frac=None,     # will be written as "NaN"
+        temperature_c=None,  # will be written as "NaN"
+        pressure_hpa=None,  # will be written as "NaN"
+        humidity_frac=None,  # will be written as "NaN"
     )
 )
 
