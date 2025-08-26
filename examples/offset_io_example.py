@@ -32,7 +32,7 @@ What this example does
 
 Output
 ------
-- A file named ``output_example.tsv`` is produced in the working directory.
+- A file named ``output_offset_io_example.tsv`` is produced in the working directory.
 - The file contains:
   - A header section populated from `Metadata` (written only once).
   - One data row per `Measurement` you provide (appended on each call).
@@ -83,10 +83,10 @@ rows.append(
 )
 
 # First run will create a file with both metadata and, if present, also data:
-write_offsets_tsv("output_example.tsv", md, rows, append=True)
+write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 
 # Second run with the same schema will append only rows of data (no metadata):
-write_offsets_tsv("output_example.tsv", md, rows, append=True)
+write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 
 # That's all. Alternatively, you can make one call for each line you append, since the
 # header is no longer added. In other words, you create one row for each line of data:
@@ -103,4 +103,4 @@ write_offsets_tsv("output_example.tsv", md, rows, append=True)
 #        humidity_frac=None,     # will be written as "NaN"
 #    )
 # ]
-# write_offsets_tsv("output_example.tsv", md, row, append=True)
+# write_offsets_tsv("output_offset_io_example.tsv", md, row, append=True)

@@ -69,10 +69,10 @@ Example
 ... ]
 >>>
 >>> # First run will create the file with header and metadata:
->>> write_offsets_tsv("output_example.tsv", md, rows, append=True)
+>>> write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 >>>
 >>> # Second run with the same schema will append rows without errors:
->>> write_offsets_tsv("output_example.tsv", md, rows, append=True)
+>>> write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 
 Design notes
 ------------
@@ -255,7 +255,7 @@ def write_offsets_tsv(
     Parameters
     ----------
     path : str
-        Output file path (e.g., "output_example.tsv").
+        Output file path (e.g., "output_offset_io_example.tsv").
     metadata : Metadata
         File-level metadata written in the commented header.
     rows : Iterable[Measurement]
