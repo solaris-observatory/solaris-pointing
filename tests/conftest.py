@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from hypothesis import strategies as st
 
-from solaris_pointing.offset_io.tsv import Metadata, Measurement
+from solaris_pointing.offset_io import Metadata, Measurement
 
 # ---------- Shared fixtures ----------
 

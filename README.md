@@ -36,7 +36,7 @@ Activate the project shell (optional):
 poetry shell
 ```
 
-> Alternatively, without Poetry:  
+> Alternatively, without Poetry:
 > ```bash
 > pip install -e .
 > ```

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from solaris_pointing.offset_io.tsv import write_offsets_tsv
+from solaris_pointing.offset_io import write_offsets_tsv
 
 
 def test_overwrite_new_file(

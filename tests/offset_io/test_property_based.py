@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from hypothesis import given, settings, HealthCheck, strategies as st
 
-from solaris_pointing.offset_io.tsv import write_offsets_tsv, Metadata, Measurement
+from solaris_pointing.offset_io import write_offsets_tsv, Metadata, Measurement
 
 
 # --- Local helpers (avoid function-scoped fixtures in @given tests) ---

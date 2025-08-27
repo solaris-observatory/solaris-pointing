@@ -13,6 +13,9 @@ keywords = ["telescope", "pointing", "offsets", "tsv"]
 
 [tool.poetry.dependencies]
 python = ">=3.11"
+joblib = "^1.5.1"
+numpy = "^2.3.2"
+pandas = "^2.3.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

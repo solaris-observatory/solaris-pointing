@@ -1,6 +1,6 @@
 """
-offset_io.tsv
-=============
+offset_io
+=========
 
 Utilities for writing telescope pointing-offset measurements to a
 tab-separated values (TSV) file with a standardized schema.
@@ -46,7 +46,7 @@ Robustness and guarantees
 
 Example
 -------
->>> from offset_io.tsv import Metadata, Measurement, write_offsets_tsv
+>>> from offset_io import Metadata, Measurement, write_offsets_tsv
 >>>
 >>> md = Metadata(
 ...     location="MZS, Antarctica",
