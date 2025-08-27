@@ -56,7 +56,7 @@ name, timestamps, offsets). The values shown here are placeholders to help you
 get started quickly.
 """
 
-from solaris_pointing.offset_io.tsv import Metadata, Measurement, write_offsets_tsv
+from solaris_pointing.offset_io import Metadata, Measurement, write_offsets_tsv
 
 # Metadata will be added to the header of the file
 md = Metadata(

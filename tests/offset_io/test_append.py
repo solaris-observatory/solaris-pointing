@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from solaris_pointing.offset_io.tsv import write_offsets_tsv
+from solaris_pointing.offset_io import write_offsets_tsv
 
 
 def test_double_append_no_schema_error(

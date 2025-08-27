@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 import pytest
 
-from solaris_pointing.offset_io.tsv import Metadata, Measurement
+from solaris_pointing.offset_io import Metadata, Measurement
 
 
 def test_metadata_valid(md: Metadata):

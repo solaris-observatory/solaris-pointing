@@ -4,7 +4,7 @@ import textwrap
 
 import pytest
 
-from solaris_pointing.offset_io.tsv import write_offsets_tsv, SchemaMismatchError
+from solaris_pointing.offset_io import write_offsets_tsv, SchemaMismatchError
 
 
 def test_header_with_extra_blank_lines(tmp_path, md, sample_row):
