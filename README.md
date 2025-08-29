@@ -11,7 +11,7 @@ procedures.
 
 ## Requirements
 
-- **Python 3.x**
+- **Python** >= 3.11
 - **Poetry** for dependency and environment management Install Poetry (if needed):
   ```bash
   curl -sSL https://install.python-poetry.org | python3 -
@@ -60,6 +60,101 @@ To integrate `offset_io` into your own code, use the [example](https://github.co
 the part where you provide the computed offsets (e.g., after a scan procedure or
 pointing model correction). The goal is always to produce a **consistent, reusable
 file**.
+
+
+---
+
+## Azimuth-only pointing model (`src/solaris_pointing/fitting/az_model.py`)
+
+This module implements an **azimuth-only** pointing model: **both** offsets
+(`offset_az`, `offset_el`) are modeled as functions of **azimuth** only. All
+internal computations use **degrees**.
+
+### When to use it
+When your observing program targets the Sun (or similarly constrained tracks),
+the elevation at a given azimuth changes slowly across days, so a short-lived
+model can approximate both offsets as polynomials of azimuth.
+
+> Tip: re-fit the model every *N* days so the approximation remains valid for
+> your current observing window.
+
+### Input data
+Use a tab-separated file (TSV produced by `offset_io`) with
+optional comment lines starting with `#` and these required columns:
+
+- `azimuth` (deg)
+- `elevation` (deg, **not used in the fit**, kept for QA)
+- `offset_az` (deg by default)
+- `offset_el` (deg by default)
+
+If your offsets are in **arcmin** or **arcsec**, see the CLI options below.
+
+### Key API (Python)
+```python
+from solaris_pointing.fitting.az_model import (
+    read_offsets_tsv,      # read a TSV; converts offsets to deg if needed
+    fit_models,            # fit Poly models (degree N) with z-score outlier cut
+    save_models,           # save models with joblib
+    load_models,           # load models with joblib
+    predict_offsets_deg,   # predict (off_az, off_el) at a given azimuth [deg]
+    model_summary,         # human-readable summary (poly + R²)
+)
+```
+
+### CLI helper (`scripts/az_model_cli.py`)
+
+The repo includes a small CLI to fit models or predict offsets from the shell.
+This CLI is not designed to show how to compute offsets in your real-time pointing routine.
+Refer to *"[Minimal runtime example (Python)](#minimal-runtime-example-python)"* instead.
+
+**Fit and save models (input in degrees, default):**
+```bash
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --summary models/fit_summary.txt
+```
+
+**Fit when input offsets are in arcminutes or arcseconds:**
+```bash
+# arcminutes
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcmin     --degree 3     --summary models/fit_summary.txt
+
+# arcseconds
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcsec     --degree 3     --summary models/fit_summary.txt
+```
+
+**Choose custom output paths for the saved models:**
+```bash
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --save-az-model custom_models/az_model.joblib     --save-el-model custom_models/el_model.joblib     --summary custom_models/fit_summary.txt
+```
+
+**Plot the fit (and optionally save a PNG):**
+```bash
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --plot     --plot-unit arcmin     --plot-file models/fit_plot.png
+```
+
+**Predict offsets (using saved models):**
+```bash
+python scripts/az_model_cli.py --predict 125.0
+# or with explicit model paths:
+python scripts/az_model_cli.py     --predict 125.0     --az-model models/az_model.joblib     --el-model models/el_model.joblib
+```
+
+### Minimal runtime example (Python)
+See this [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/az_model_example.py) for a tiny integration example that loads previously fitted models, predicts
+the offsets for a given azimuth, and **applies** them to your ideal pointing:
+
+```python
+from solaris_pointing.fitting.az_model import load_models, predict_offsets_deg
+
+ideal_az_deg, ideal_el_deg = 125.0, 40.0
+az_model, el_model = load_models("models/az_model.joblib", "models/el_model.joblib")
+off_az_deg, off_el_deg = predict_offsets_deg(az_model, el_model, ideal_az_deg)
+corr_az_deg, corr_el_deg = ideal_az_deg + off_az_deg, ideal_el_deg + off_el_deg
+print(corr_az_deg, corr_el_deg)
+```
+
+> The sign convention here is `corrected = ideal + offset`. Adjust if your
+> control system uses a different convention.
+
 
 ---
 
