@@ -1,53 +1,135 @@
 # Solaris Pointing
 ![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)![Coverage Status](https://coveralls.io/repos/github/solaris-observatory/solaris-pointing/badge.svg?branch=main)
 
-**Solaris Pointing** is a Python package designed to support the analysis and
-improvement of telescope pointing. It provides tools to record, store, and analyze
-pointing offsets, to build and apply pointing models, and to handle related calibration
-procedures.
+This library provides a framework for the following workflow:
+**1)** creating a standard offset file from maps;
+**2)** building a pointing model from the offset file;
+**3)** applying the model during pointing.
+Each of these steps is explained in detail after the *Installation* section.
 
 
 ---
 
-## Requirements
+## Installation
 
-- **Python** >= 3.11
-- **Poetry** for dependency and environment management Install Poetry (if needed):
-  ```bash
-  curl -sSL https://install.python-poetry.org | python3 -
-  ```
-  (Or follow the official instructions at [python-poetry.org](https://python-poetry.org))
+The recommended way to install solaris-pointing is by combining
+[pyenv](https://github.com/pyenv/pyenv) and
+[poetry](https://python-poetry.org)). With *pyenv* you can easily
+manage multiple Python versions, while *Poetry* takes care of creating
+virtual environments, handling dependencies, and packaging your project.
+
 
 ---
 
-## Installation (with Poetry)
+### Install and Configure pyenv
 
-Clone the repository and install dependencies:
+To install [pyenv](https://github.com/pyenv/pyenv)  on Linux/macOS:
 
 ```bash
-git clone https://github.com/solaris-observatory/solaris-pointing
+curl https://pyenv.run | bash
+```
+
+Then add the following lines to your shell configuration file
+(*~/.bashrc*, *~/.zshrc*, etc.):
+
+```bash
+export PATH="$HOME/.pyenv/bin:$PATH"
+eval "$(pyenv init -)"
+eval "$(pyenv virtualenv-init -)"
+```
+
+Reload your shell:
+
+```
+exec "$SHELL"
+```
+
+Install Python 3.11:
+
+```
+pyenv install 3.11.12
+```
+
+Activate the shell:
+
+```
+pyenv shell 3.11.12
+```
+
+Verify the installation:
+
+```
+python --version
+```
+
+You should see ``Python 3.11.12``
+
+Now your shell is running Python 3.11 through *pyenv*.
+
+
+### Install Poetry
+
+On Linux/macOS:
+
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+Add Poetry to your PATH (if not already there):
+
+```bash
+# Bash/Zsh
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc    # or ~/.zshrc
+```
+
+Reload your shell and verify:
+
+```bash
+exec "$SHELL"
+poetry --version
+```
+
+### Install solaris-pointing
+
+```bash
+git clone https://github.com/solaris-observatory/solaris-pointing.git
 cd solaris-pointing
-poetry install
+pyenv shell 3.11.12 # Activate the pyenv 3.11.12 shell
+poetry install # Install project + dev dependencies
 ```
 
-Activate the project shell (optional):
+Whenever you want to use *solaris-pointing*, you just need to activate the
+right shells:
 
 ```bash
-poetry shell
+pyenv shell 3.11.12
+poetry shell   # Run this inside the solaris-pointing directory
 ```
 
-> Alternatively, without Poetry:
-> ```bash
-> pip install -e .
-> ```
+The first command, ``pyenv shell 3.11.12``, tells your terminal to use
+Python version 3.11.12 for this session. The second command,
+``poetry shell``, activates the virtual environment that
+Poetry created for solaris-pointing. This ensures you are running
+Python with all the correct dependencies for the project.
+
 
 ---
 
-## Using `offset_io`
+## Workflow
 
-The **`offset_io`** library produces a **standard output file** containing telescope
-pointing offsets (e.g., azimuth/altitude corrections, time, metadata, etc.), so that
-different algorithms can **generate compatible results**.
+Now let's look in detail at the following steps of the workflow:
+
+* creating a standard offset file from maps;
+* building a pointing model from the offset file;
+* applying the model during pointing.
+
+
+### Creating a standard offset file
+
+Any script responsible for calculating offsets should use the
+``offset_io`` module from solaris-pointing to generate a standard
+output file. This file is required as input for step 2 of the workflow.
 
 The easiest way to start is by reading the included [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/offset_io_example.py), which contains
 a detailed **docstring**. In the example you will see:
@@ -56,56 +138,35 @@ a detailed **docstring**. In the example you will see:
 - How to **prepare** pointing offset data
 - How to **write** them into the **standard format**
 
-To integrate `offset_io` into your own code, use the [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/offset_io_example.py) as a template and adapt
-the part where you provide the computed offsets (e.g., after a scan procedure or
-pointing model correction). The goal is always to produce a **consistent, reusable
-file**.
+To integrate `offset_io` into your own code, use the [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/offset_io_example.py) as a template.
 
 
----
+### Building a pointing model from the offset file
 
-## Azimuth-only pointing model (`src/solaris_pointing/fitting/az_model.py`)
+Once the offset file has been generated, you can use the ``az_model_cli.py``
+script to create the pointing model. Suppose the offset file is located
+in the *templates* directory at the root of ``solaris-pointing``. Here's
+how to create a pointing model (in this case, of degree 5):
 
-This module implements an **azimuth-only** pointing model: **both** offsets
-(`offset_az`, `offset_el`) are modeled as functions of **azimuth** only. All
-internal computations use **degrees**.
-
-### When to use it
-When your observing program targets the Sun (or similarly constrained tracks),
-the elevation at a given azimuth changes slowly across days, so a short-lived
-model can approximate both offsets as polynomials of azimuth.
-
-> Tip: re-fit the model every *N* days so the approximation remains valid for
-> your current observing window.
-
-### Input data
-Use a tab-separated file (TSV produced by `offset_io`) with
-optional comment lines starting with `#` and these required columns:
-
-- `azimuth` (deg)
-- `elevation` (deg, **not used in the fit**, kept for QA)
-- `offset_az` (deg by default)
-- `offset_el` (deg by default)
-
-If your offsets are in **arcmin** or **arcsec**, see the CLI options below.
-
-### Key API (Python)
-```python
-from solaris_pointing.fitting.az_model import (
-    read_offsets_tsv,      # read a TSV; converts offsets to deg if needed
-    fit_models,            # fit Poly models (degree N) with z-score outlier cut
-    save_models,           # save models with joblib
-    load_models,           # load models with joblib
-    predict_offsets_deg,   # predict (off_az, off_el) at a given azimuth [deg]
-    model_summary,         # human-readable summary (poly + R²)
-)
+```bash
+python scripts/az_model_cli.py templates/output_offset_io_example.tsv --degree 5 --plot --plot-file models/fit_plot.png
 ```
 
-### CLI helper (`scripts/az_model_cli.py`)
+Note that the script ``az_model_cli.py`` creates an **azimuth-only** pointing
+model: **both** offsets (`offset_az`, `offset_el`) are modeled as functions
+of **azimuth** only. That's because, when the target is the Sun, the elevation
+at a given azimuth changes slowly across days, so a short-lived model can
+approximate both offsets as polynomials of azimuth.
 
-The repo includes a small CLI to fit models or predict offsets from the shell.
-This CLI is not designed to show how to compute offsets in your real-time pointing routine.
-Refer to *"[Minimal runtime example (Python)](#minimal-runtime-example-python)"* instead.
+**Tip**: re-fit the model every *N* days so the approximation remains valid for
+your current observing window.
+
+#### More about creating the model
+
+This CLI ``az_model_cli.py`` is not designed to show how to compute
+offsets in your real-time pointing routine. Refer to
+*"[Applying the model during pointing](#applying-the-model-during-pointing)"*
+instead.
 
 **Fit and save models (input in degrees, default):**
 ```bash
@@ -138,9 +199,13 @@ python scripts/az_model_cli.py --predict 125.0
 python scripts/az_model_cli.py     --predict 125.0     --az-model models/az_model.joblib     --el-model models/el_model.joblib
 ```
 
-### Minimal runtime example (Python)
-See this [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/az_model_example.py) for a tiny integration example that loads previously fitted models, predicts
-the offsets for a given azimuth, and **applies** them to your ideal pointing:
+### Applying the model during pointing.
+
+Use the model to apply offsets when creating a map or, more generally,
+when pointing to a source. See this [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/az_model_example.py) for a tiny integration
+example that loads previously fitted models, predicts
+the offsets for a given azimuth, and applies them to your ideal pointing.
+Here is a summary:
 
 ```python
 from solaris_pointing.fitting.az_model import load_models, predict_offsets_deg
@@ -152,9 +217,7 @@ corr_az_deg, corr_el_deg = ideal_az_deg + off_az_deg, ideal_el_deg + off_el_deg
 print(corr_az_deg, corr_el_deg)
 ```
 
-> The sign convention here is `corrected = ideal + offset`. Adjust if your
-> control system uses a different convention.
-
+The sign convention here is `corrected = ideal + offset`.
 
 ---
 
