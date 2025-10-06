@@ -79,15 +79,14 @@ Add Poetry to your PATH (if not already there):
 
 ```bash
 # Bash/Zsh
-export PATH="$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc    # or ~/.zshrc
 ```
 
-Reload your shell and verify:
+Reload your shell and install `poetry-plugin-shell`:
 
 ```bash
 exec "$SHELL"
-poetry --version
+poetry self add poetry-plugin-shell
 ```
 
 ### Install solaris-pointing
@@ -113,6 +112,12 @@ Python version 3.11.12 for this session. The second command,
 Poetry created for solaris-pointing. This ensures you are running
 Python with all the correct dependencies for the project.
 
+To check the installation, run an example from the root of
+``solaris-pointing``:
+
+```bash
+python examples/offset_io_example.py
+```
 
 ---
 
