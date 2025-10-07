@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 """
-pointing_offsets_cli.py
-=======================
+pointing_offsets_runner.py
+==========================
 
 CLI runner that discovers maps, loads an algorithm plugin, and writes results
 to a standardized TSV via `offset_io` (located at
@@ -16,15 +16,19 @@ Features
 
 Usage examples
 --------------
-python scripts/pointing_offsets_cli.py --data-dir ./data --out ./data/offsets.tsv --algo algo_gauss2d --verbose
+python scripts/pointing_offsets_runner.py --data-dir ./data --out ./data/offsets.tsv --algo algo_gauss2d --verbose
 
-python scripts/pointing_offsets_cli.py --data-dir ./data --start 2025-01-01T00:00:00Z --end 2025-01-02T00:00:00Z     --env-csv ./data/environment.csv --algo algo_gauss2d
+python scripts/pointing_offsets_runner.py --data-dir ./data --start 2025-01-01T00:00:00Z --end 2025-01-02T00:00:00Z     --env-csv ./data/environment.csv --algo algo_gauss2d
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 import os
 from typing import Dict, Optional, Tuple
 
@@ -68,12 +72,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-plots", action="store_true", help="Disable diagnostic plot generation")
     p.add_argument("--verbose", action="store_true", help="Verbose logging")
 
+    # Recursive discovery
+    p.add_argument("--recursive", action="store_true", help="Search data-dir recursively for *.path/*.sky")
+
     # Environment CSV (Option B) + strictness
     p.add_argument("--env-csv", default=None,
                    help="CSV with per-map environment (map_id,temperature_c,pressure_hpa,humidity_frac). "
                         "If omitted, the runner will try '<data-dir>/environment.csv' if present.")
     p.add_argument("--env-strict", default="warn", choices=("warn","missing-error","ignore"),
                    help="How to treat environment mismatches. Default: warn.")
+    p.add_argument("--progress", action="store_true", help="Show a progress bar over maps (requires tqdm)")
     return p
 
 def main() -> None:
@@ -81,7 +89,7 @@ def main() -> None:
     args = ap.parse_args()
 
     # Discover maps
-    maps = discover_maps(args.data_dir, args.start, args.end)
+    maps = discover_maps(args.data_dir, args.start, args.end, recursive=args.recursive)
     if args.verbose:
         print(f"Discovered {len(maps)} maps in {args.data_dir}")
 
@@ -137,11 +145,32 @@ def main() -> None:
                 print(f"WARNING: {w}")
         # 'ignore' → no messages
 
+    # Optional progress bar
+    pbar = None
+    if args.progress:
+        if tqdm is None:
+            print('WARNING: --progress requested but tqdm not available; install via `pip install tqdm`')
+        else:
+            pbar = tqdm(total=len(maps), desc='Processing maps', unit='map')
+
     # Build timestamp_iso -> map_id mapping so the writer can attach env values
     ts_to_map: Dict[str, str] = {mp.map_timestamp_iso: mp.map_id for mp in maps}
 
     # Build writer with environment enrichment
     write_row = writer_factory(args.out, md, env_by_map, ts_to_map)
+
+    # Wrap writer to print per-map progress (only when --verbose is set).
+    def write_row_with_progress(timestamp_iso: str, az: float, el: float, daz: float, del_: float) -> None:
+        # First, write to the TSV via offset_io
+        write_row(timestamp_iso, az, el, daz, del_)
+        # Then, report progress to stdout
+        if args.verbose:
+            mid = ts_to_map.get(timestamp_iso, timestamp_iso)
+            print(f"[OK] {mid}  |  d_az={daz:.4f} deg  d_el={del_:.4f} deg  |  az={az:.3f}  el={el:.3f}")
+        if pbar is not None:
+            pbar.set_postfix_str(f"last={mid}")
+            pbar.update(1)
+
 
     # Import algorithm module dynamically (accept plain name or fully qualified)
     algo_name = args.algo
@@ -152,8 +181,10 @@ def main() -> None:
         raise RuntimeError(f"Algorithm module '{algo_name}' has no 'compute_offsets' function.")
 
     # Hand off to the algorithm
-    algo.compute_offsets(maps=maps, site=site, cfg=cfg, write_row=write_row)
+    algo.compute_offsets(maps=maps, site=site, cfg=cfg, write_row=write_row_with_progress)
 
+    if pbar is not None:
+        pbar.close()
     if args.verbose:
         print(f"Done. Results appended to: {args.out}")
 
