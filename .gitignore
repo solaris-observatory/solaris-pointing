@@ -6,3 +6,5 @@ htmlcov
 .hypothesis
 .tox/
 output_example*
+orange*
+TODO.txt
