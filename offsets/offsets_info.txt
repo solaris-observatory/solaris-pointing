@@ -1,0 +1,1 @@
+By default, this directory is used to read and save offset files.

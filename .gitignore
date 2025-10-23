@@ -8,4 +8,8 @@ htmlcov
 output_example*
 orange*
 logs/
+offsets/orange*
+offsets/marongiu*
+models/orange*
+models/marongiu*
 TODO.txt
