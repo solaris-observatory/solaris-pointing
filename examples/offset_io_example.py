@@ -72,11 +72,11 @@ rows = []  # Rows of data, one for each map, that you want to append to the file
 rows.append(
     Measurement(
         map_id="20250801T101011",
-        timestamp_iso="2025-08-01T10:00:00Z",
-        azimuth_deg=123.456,
-        elevation_deg=45.789,
-        offset_az_deg=0.0034,
-        offset_el_deg=-0.0023,
+        timestamp_iso="2025-08-01T10:00:00Z",  # At Sun's centroid
+        azimuth_deg=123.456,  # azimuth of the Sun's centroid from ephemerides
+        elevation_deg=45.789,  # azimuth of the Sun's centroid from ephemerides
+        offset_az_deg=0.0034,  # observed azimuth - solar azimuth
+        offset_el_deg=-0.0023,  # observed elevation - solar elevation
         temperature_c=None,  # will be written as "NaN"
         pressure_hpa=None,  # will be written as "NaN"
         humidity_frac=None,  # will be written as "NaN"

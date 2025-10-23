@@ -142,9 +142,9 @@ class Measurement:
     elevation_deg : float
         Elevation of the Sun's centroid from ephemerides [deg].
     offset_az_deg : float
-        (solar azimuth − observed azimuth) [deg].
+        (observed azimuth − solar azimuth) [deg].
     offset_el_deg : float
-        (solar elevation − observed elevation) [deg].
+        (observed elevation − solar elevation) [deg].
     temperature_c : Optional[float]
         Ambient temperature [°C]. If None, serialized as "NaN".
     pressure_hpa : Optional[float]
@@ -199,13 +199,13 @@ def _write_metadata_block(f: TextIO, md: Metadata) -> None:
     f.write("# ------------\n")
     f.write("# map_id: map identifier\n")
     f.write(
-        "# timestamp: ISO 8601 - time when the telescope pointed at the Sun's "
-        "centroid\n"
+        "# timestamp: time when the telescope pointed at the Sun's "
+        "centroid [ISO 8601]\n"
     )
     f.write("# azimuth: of the Sun's centroid from ephemerides [deg]\n")
     f.write("# elevation: of the Sun's centroid from ephemerides [deg]\n")
-    f.write("# offset_az: solar azimuth - observed azimuth, deg\n")
-    f.write("# offset_el: solar elevation - observed elevation, deg\n")
+    f.write("# offset_az: observed azimuth - solar azimuth [deg]\n")
+    f.write("# offset_el: observed elevation - solar elevation [deg]\n")
     f.write("# temperature: °C\n")
     f.write("# pressure: hPa\n")
     f.write("# humidity: relative humidity, fraction (0..1)\n")
