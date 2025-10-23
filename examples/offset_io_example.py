@@ -56,13 +56,13 @@ name, timestamps, offsets). The values shown here are placeholders to help you
 get started quickly.
 """
 
-from solaris_pointing.offset_io import Metadata, Measurement, write_offsets_tsv
+from solaris_pointing.offset_core.offset_io import Metadata, Measurement, write_offsets_tsv
 
 # Metadata will be added to the header of the file
 md = Metadata(
     location="MZS, Antarctica",
     antenna_diameter_m=2.0,
-    frequency_hz=100e9,
+    frequency_ghz=100,
     software_version="2025.08.05",
 )
 
@@ -71,6 +71,7 @@ rows = []  # Rows of data, one for each map, that you want to append to the file
 # For every map of that location, append the corresponding raw data.
 rows.append(
     Measurement(
+        map_id="20250801T101011",
         timestamp_iso="2025-08-01T10:00:00Z",
         azimuth_deg=123.456,
         elevation_deg=45.789,
@@ -93,6 +94,7 @@ write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 #
 # row = [
 #    Measurement(
+#        map_id="20250801T101011",
 #        timestamp_iso="2025-08-01T10:00:00Z",
 #        azimuth_deg=123.456,
 #        elevation_deg=45.789,

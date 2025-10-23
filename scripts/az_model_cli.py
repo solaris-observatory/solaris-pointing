@@ -560,11 +560,8 @@ def _plot_fit(
     label_y: str,
     bundle=None,
 ):
-    """
-    Plot scatter (outliers/inliers) and fitted curve, rendering in the requested unit.
-    NOTE: The fitted-curve label is just 'fit' (no hyperparameters here).
-          Put hyperparameters in the figure title outside this function.
-    """
+    """Plot scatter (outliers/inliers) and fitted curve, rendering in the
+    requested unit."""
     # conversion factor for rendering (deg -> chosen unit)
     fac = _axis_factor_for_unit(unit)
 
