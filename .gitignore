@@ -7,4 +7,5 @@ htmlcov
 .tox/
 output_example*
 orange*
+logs/
 TODO.txt

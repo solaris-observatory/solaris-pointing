@@ -1,0 +1,18 @@
+# Template per configurare i percorsi di default
+# per file di offset e modelli, con nomi personalizzabili.
+
+[output]
+# Directory predefinita per i file di offset (relativa alla root del progetto)
+out_dir = "output/offsets"
+
+# Template del nome file TSV degli offset
+# Placeholders: {site}, {algo}, {stamp}
+filename_template = "offsets_{site}_{algo}_{stamp}.tsv"
+
+[models]
+# Directory predefinita per i file dei modelli (relativa alla root del progetto)
+out_dir = "output/models"
+
+# Template del nome file dei modelli (azimut ed elevazione)
+# Placeholders: {site}, {kind}, {stamp}
+filename_template = "{site}_{kind}_{stamp}.joblib"

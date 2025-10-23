@@ -1,0 +1,4 @@
+site_name	timestamp	pressure_hPa	temperature_C	tau_225
+MZS	2025-01-03T00:02:35Z	1012	-7.5	0.05
+MZS	2025-01-03T00:17:35Z	1011	none	0.06
+MZS	2025-01-03T00:32:35Z	none	-8.3	none

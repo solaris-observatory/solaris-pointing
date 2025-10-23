@@ -1,0 +1,31 @@
+# Default parameters for the 1D peak-finding offset algorithm
+
+[algo]
+# Nome dell'algoritmo (usato anche nel nome del file di output)
+name = "peak1d"
+
+[algo.peak1d]
+# Valore minimo del segnale da considerare valido
+signal_min = 0.05
+
+# Passo della griglia (in gradi)
+grid_step_deg = 0.05
+
+# Smoothing (sigma in gradi) applicato al profilo 1D
+smooth_sigma_deg = 0.10
+
+# Larghezza a metà altezza del fascio (Full Width at Half Maximum)
+fwhm_deg = 0.5
+
+# Tipo di rifrazione usata nel calcolo dell'ephemeris
+refraction = "apparent"
+
+[output]
+# Directory predefinita per i file di offset
+out_dir = "output/offsets"
+filename_template = "offsets_{site}_{algo}_{stamp}.tsv"
+
+[models]
+# Directory predefinita per i modelli
+out_dir = "output/models"
+filename_template = "{site}_{kind}_{stamp}.joblib"

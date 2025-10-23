@@ -1,346 +1,752 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-az_model_cli.py
-================
+"""Fit azimuth-only pointing offsets.
 
-CLI to fit and use *azimuth-only* pointing models for telescope offsets.
-Both offset_az and offset_el are modeled as polynomials of azimuth only.
+This CLI wraps the core azimuth-only modeling library to fit, summarize,
+and predict telescope pointing offsets directly from TSV input files
+or saved model bundles (.joblib). It provides a convenient interface for
+campaign data analysis, comparison across datasets, and understanding the
+physical behavior of telescope pointing systems.
 
-Data format
------------
-Input is a TSV (tab-separated) with optional comment lines starting with '#'
-and at least the following columns (all angles may be in degrees or arcsec):
-    * azimuth
-    * offset_az
-    * offset_el
-If your offsets are in arcseconds, set --input-offset-unit=arcsec.
+-------------------------------------------------------------------------------
+Available subcommands
+-------------------------------------------------------------------------------
+fit       Fit az/el models from one or more TSV input files.
+predict   Predict az/el offsets for a given azimuth using a saved model.
+summary   Print model diagnostics and metadata.
 
-Examples
---------
-Fit models from the example dataset (offsets are in arcseconds) and save them
-to the default "models/" directory. Also write a short summary text file.
+-------------------------------------------------------------------------------
+Command-line usage examples
+-------------------------------------------------------------------------------
+1. Fit a single file alpacino.tsv:
 
-    python scripts/az_model_cli.py \
-        templates/output_offset_io_example.tsv \
-        --input-offset-unit arcsec \
-        --degree 3 \
-        --summary models/fit_summary.txt
+   python scripts/az_model_cli.py fit alpacino.tsv \
+       --degree 3 --zscore-az 3.5 --zscore-el 3.5
 
-Fit models and save them to a custom directory (e.g. "custom_models/"):
+   Default: reads from offsets/, saves to models/.
+   (If you pass a path with a directory component, no offsets/ fallback is used.)
 
-    python scripts/az_model_cli.py \
-        templates/output_offset_io_example.tsv \
-        --input-offset-unit arcsec \
-        --degree 3 \
-        --save-az-model custom_models/az_model.joblib \
-        --save-el-model custom_models/el_model.joblib \
-        --summary custom_models/fit_summary.txt
+   Generated files:
+   - models/alpacino.joblib
+   - models/alpacino_summary.txt
+   - models/alpacino_az.png
+   - models/alpacino_el.png
 
-Fit and show a plot with raw, filtered, and fitted curves; also save a PNG:
+2. Fit multiple files at once:
 
-    python scripts/az_model_cli.py \
-        templates/output_offset_io_example.tsv \
-        --input-offset-unit arcsec \
-        --degree 3 \
-        --plot \
-        --plot-file models/fit_plot.png
+   python scripts/az_model_cli.py fit alpacino.tsv leone.tsv \
+       --degree 3 --zscore-az 3.5 --zscore-el 3.5 \
+       --fourier-k 2 --plot-unit arcmin
 
-Use arcminutes as input unit and show the plot in arcminutes too:
+   Saves one bundle and one pair of PNG plots per input file, using each input
+   filename stem. Also produces a combined curves-only plot if multiple files
+   are provided. The combined output consists of two images (az/el), named by
+   concatenating stems (in alphabetical order) using "+" as a separator:
+   - models/<stem1+stem2+...>_az.png
+   - models/<stem1+stem2+...>_el.png
 
-    python scripts/az_model_cli.py \
-        templates/output_offset_io_example.tsv \
-        --input-offset-unit arcmin \
-        --degree 3 \
-        --plot \
-        --plot-unit arcmin
+3. Fit with Fourier harmonics and ridge regularization:
 
-Predict both offsets, in degrees, at azimuth 125.0 using the saved models:
+   python scripts/az_model_cli.py fit alpacino.tsv \
+       --degree 3 --zscore-az 3.5 --zscore-el 3.5 \
+       --fourier-k 2 --ridge-alpha 0.01
 
-    python scripts/az_model_cli.py --predict 125.0
+   The --ridge-alpha parameter (default 0.01) stabilizes high-degree fits
+   or unevenly sampled data by shrinking coefficients slightly. Physically,
+   it mitigates effects of near-collinearity among basis functions that can
+   arise from mechanical geometries or non-uniform sampling over azimuth.
 
-Use custom model paths for prediction:
+4. Predict from an existing model:
 
-    python scripts/az_model_cli.py \
-        --predict 125.0 \
-        --az-model models/az_model.joblib \
-        --el-model models/el_model.joblib
+   python scripts/az_model_cli.py predict models/alpacino.joblib \
+       --az 12.0 --unit arcsec --allow-extrapolation
 
-Notes
------
-* All modeling is done in **degrees**. If the input file stores offsets in
-  arcseconds or arcminutes, the script converts them to degrees before fitting.
-* Recommended workflow: re-fit the model every N days so that the approximation
-  "offsets depend only on azimuth" remains valid for your observing window.
+   The prediction is printed in the requested unit. With --allow-extrapolation
+   (available only for `predict`), the tool permits evaluation slightly outside
+   the observed azimuth range used during fitting; accuracy outside this range
+   is not guaranteed.
+
+5. Fit with custom output locations:
+
+   python scripts/az_model_cli.py fit alpacino.tsv leone.tsv \
+       --save-model models/marongiu.joblib --summary results/summary.txt \
+       --degree 3 --zscore-az 3.5 --zscore-el 3.5
+
+   When multiple files are provided, the tool automatically appends the
+   input filename stem before the extension for both --save-model and --summary.
+
+-------------------------------------------------------------------------------
+Input and output conventions
+-------------------------------------------------------------------------------
+- Input TSV files are searched under `offsets/` if no directory component is
+  given in the path. If a directory is included, the file is taken as-is.
+- Default output directory for models and plots is `models/`.
+- Combined multi-file plots concatenate stems in alphabetical order using "+".
+
+-------------------------------------------------------------------------------
+Parameters and their physical meaning
+-------------------------------------------------------------------------------
+- `degree` (int): polynomial degree for the fit (1=linear, 2=quadratic, 3=cubic, ...)
+  Higher degree increases flexibility but may overfit.
+
+- `zscore-az`, `zscore-el` (float): robust outlier rejection thresholds based
+  on MAD. Points with residuals beyond (threshold × MAD) are ignored by the
+  final fit. Physically, these help exclude data affected by transient
+  mechanical effects, wind, seeing, or other disturbances.
+
+- `ridge-alpha` (float): L2 regularization strength (default 0.01);
+  small positive values help stabilize high-degree polynomials. Physically,
+  this limits sensitivity to redundant or correlated basis functions due to
+  geometry or uneven azimuth coverage.
+
+- `fourier-k` (int): number of Fourier harmonics to add (0 disables them).
+  Physical meaning: captures periodic azimuthal errors (e.g., encoder defects,
+  gear eccentricity, or cable-wrap effects) by adding sine/cosine terms that
+  modulate the offset as a function of azimuth.
+
+- `periods-deg` (str): comma-separated list of custom periods (degrees per cycle),
+  e.g., "90,45". Use to model periodicities not tied to simple 1/rev harmonics
+  (e.g., worm gear ratios or encoder line counts).
+  Physical meaning: focuses the model on known mechanical cycles or periodic
+  sources, reducing aliasing and improving interpretability.
+
+- `sector-edges-deg` (str): comma-separated sector edges in degrees (e.g., 60,210).
+  Physical meaning: introduces step-like (piecewise) biases between azimuth
+  sectors to model static offsets caused by backlash, hysteresis, or mechanical
+  regime changes (e.g., side-switching, assembly discontinuities).
+
+- `input-offset-unit` (deg|arcmin|arcsec): unit of `offset_az/offset_el` in the TSV.
+  Internally everything is converted to degrees before fitting. By default, the
+  tool expects degrees, but you can override this with --input-offset-unit.
+
+- `notes` (str): free text stored in the model metadata for traceability.
+
+- `plot-unit` (deg|arcmin|arcsec): rendering unit for plots (Y axis only).
+  In `fit`, it applies to the automatically saved figures.
+
+- `save-model` (path): where to save the .joblib bundle. When fitting multiple
+  files, the input filename stem is appended automatically before the extension.
+
+- `summary` (path): where to save a human-readable text report. For multiple
+  input files, the input stem is inserted before the extension.
+
+- `allow-extrapolation` (predict only, bool): allow evaluation beyond the
+  observed azimuth range (use with care; extrapolated values may not be
+  physically reliable).
+
+-------------------------------------------------------------------------------
+Harmonic and sector modeling
+-------------------------------------------------------------------------------
+Harmonics (`fourier-k`) add sin(k·A) and cos(k·A) with A the wrapped azimuth,
+to describe smooth periodic effects over one revolution (0–360°). They are
+useful when cyclic sources exist — encoder eccentricities, gear errors,
+cable-wrap torsions, etc. The model adapts to repeating oscillations
+over azimuth.
+
+- **Custom periods** (`periods-deg`): specify explicit periods P (in degrees)
+  for the harmonic terms (sin/cos with period P). This focuses the model on
+  physically meaningful frequencies — e.g., a 360/N gear tooth pattern —
+  reducing aliasing and improving interpretability.
+
+- **Sector edges** (`sector-edges-deg`): define boundaries (in degrees) that
+  partition azimuth into regions. The model assigns distinct biases to
+  each sector, representing discontinuities linked to backlash, play release,
+  or mechanical side-switching. These terms are discrete, not smooth.
+
+Optional parameters `--periods-deg` and `--sector-edges-deg` can be used
+together within the same `fit` command.
+
+-------------------------------------------------------------------------------
+What the saved figures show
+-------------------------------------------------------------------------------
+Per-file plots visualize:
+- The linearized azimuth (`az_lin`) on the x-axis.
+- Scatter points for measured offsets and the fitted curve.
+- Robust inlier/outlier masks using z-score thresholds from the bundle
+  metadata when available, or CLI thresholds otherwise.
+- Units displayed according to --plot-unit.
+- Multi-file fits include an additional combined curves-only overlay
+  (two PNGs, suffixes _az/_el) saved when more than one TSV is given to `fit`.
+  In the combined plots, the legend lists file stems only, while fit parameters
+  for each file are summarized in the figure title.
+
+-------------------------------------------------------------------------------
+Outputs and summaries
+-------------------------------------------------------------------------------
+Each fit produces:
+- A .joblib bundle containing both azimuth and elevation models, metadata,
+  and fit diagnostics.
+- One or more .png plots showing inliers/outliers and fitted curves.
+- A text summary file containing key statistics and any user-provided notes.
+
+-------------------------------------------------------------------------------
+Practical guidance for fitting
+-------------------------------------------------------------------------------
+- Start with a low polynomial degree (2 or 3), then add `fourier-k` if residuals
+  show periodic structure over azimuth. Consider `periods-deg` when a source
+  has a known geometric period.
+- Use `sector-edges-deg` only when residuals exhibit step-like behavior across
+  azimuth ranges, typical of backlash or regime switching.
+- Avoid excessive complexity (high k, many edges) with small datasets, as it
+  increases the risk of overfitting and reduces robustness.
+- For best performance, provide at least one full revolution of azimuth data
+  or more than 200 measurement points per dataset.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import os
-from typing import Optional
+import math
+import itertools
 
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# Import the library from the project package layout
-from solaris_pointing.fitting.az_model import (
-    fit_models,
-    fit_models_from_tsv,
-    read_offsets_tsv,
-    save_models,
-    load_models,
-    predict_offsets_deg,
-    model_summary,
-)
-
-
-def _ensure_parent_dir(path: str) -> None:
-    """Create the parent directory of *path* if it does not exist."""
-    parent = os.path.dirname(path) or "."
-    os.makedirs(parent, exist_ok=True)
-
-
-def _remove_outliers_z(y: np.ndarray, z: float) -> np.ndarray:
-    """Return boolean mask where |zscore(y)| < z; robust to zero/NaN std."""
-    y = np.asarray(y, dtype=float)
-    std = float(np.nanstd(y))
-    if std == 0 or np.isnan(std):
-        return np.ones_like(y, dtype=bool)
-    zscores = np.abs((y - np.nanmean(y)) / std)
-    return zscores < z
+try:
+    # Package import (preferred path when installed as part of solaris_pointing)
+    from solaris_pointing.fitting.az_model import (
+        fit_models_from_tsv,
+        load_model_bundle,
+        save_model_bundle,
+        predict_offsets_deg,
+        model_summary,
+        read_offsets_tsv,
+        unwrap_azimuth,
+    )
+except Exception:
+    # Fallback: allow running this CLI "standalone" next to az_model.py
+    from az_model import (
+        fit_models_from_tsv,
+        load_model_bundle,
+        save_model_bundle,
+        predict_offsets_deg,
+        model_summary,
+        read_offsets_tsv,
+        unwrap_azimuth,
+    )
 
 
-def _deg_to_factor(unit: str) -> float:
-    """Return multiplier to convert degrees to the requested unit."""
+
+# -----
+def _stem(path: str) -> str:
+    return os.path.splitext(os.path.basename(path))[0]
+
+def _with_ext_same_dir(path: str, new_ext: str) -> str:
+    """Return path in the SAME directory as input, same stem, with new_ext
+    (including dot)."""
+    d = os.path.dirname(path)
+    s = os.path.splitext(os.path.basename(path))[0]
+    return os.path.join(d or ".", s + new_ext)
+
+
+def _insert_stem_before_ext(base_path: str, stem: str) -> str:
+    """Insert _{stem} before the extension of base_path.
+    Example:
+      - models/x.joblib -> models/x_{stem}.joblib
+      - models/summary.txt -> models/summary_{stem}.txt
+    If base_path has no extension, appends _{stem}.
+    """
+    base, ext = os.path.splitext(base_path)
+    return f"{base}_{stem}{ext}"
+
+
+def _ensure_dir(path: str) -> None:
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+
+def _parse_csv_floats(text: str):
+    text = (text or '').strip()
+    if not text:
+        return None
+    out = []
+    for tok in text.split(','):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(float(tok))
+        except Exception:
+            raise ValueError(f"Invalid float in list: {tok!r}")
+    return out if out else None
+
+
+def _resolve_input_tsv(path: str) -> str:
+    """If 'path' has no directory component, look for it under 'offsets/'."""
+    if os.path.isabs(path) or os.sep in path:
+        return path
+    cand = os.path.join("offsets", path)
+    return cand
+
+
+def _default_models_dir() -> str:
+    return "models"
+
+
+def _default_model_path_for_stem(stem: str) -> str:
+    return os.path.join(_default_models_dir(), stem + ".joblib")
+
+
+def _default_plot_paths_for_stem(stem: str) -> tuple[str, str]:
+    base = os.path.join(_default_models_dir(), stem + ".png")
+    root, ext = os.path.splitext(base)
+    return f"{root}_az{ext}", f"{root}_el{ext}"
+
+
+# -------
+# Helpers
+# -------
+
+def _to_deg_from_unit(x: np.ndarray, unit: str) -> np.ndarray:
+    if unit == "deg":
+        return x
+    elif unit == "arcmin":
+        return x / 60.0
+    elif unit == "arcsec":
+        return x / 3600.0
+    else:
+        raise ValueError(f"Unknown unit: {unit!r}")
+
+
+def _axis_factor_for_unit(unit: str) -> float:
     if unit == "deg":
         return 1.0
-    if unit == "arcmin":
+    elif unit == "arcmin":
         return 60.0
-    if unit == "arcsec":
+    elif unit == "arcsec":
         return 3600.0
-    raise ValueError(f"Unsupported unit: {unit}")
+    else:
+        raise ValueError(f"Unknown unit: {unit!r}")
+
+
+# -----------
+# Subcommands
+# -----------
+
+def cmd_fit(args: argparse.Namespace) -> int:
+
+    # Accept multiple TSV inputs
+    raw_paths = args.tsv if isinstance(args.tsv, (list, tuple)) else [args.tsv]
+    tsv_paths = [_resolve_input_tsv(p) for p in raw_paths]
+    bundles = []  # (stem, bundle, tsv_path, az_lin, off_az, off_el)
+
+    # Ensure output base directory exists (models/) for defaults
+    os.makedirs(_default_models_dir(), exist_ok=True)
+
+    # Fit per file
+    for path in tsv_paths:
+        work_path = path
+        # Unit conversion to degrees if requested
+        if args.input_offset_unit != "deg":
+            df = read_offsets_tsv(work_path)
+            df = df.copy()
+            df["offset_az"] = _to_deg_from_unit(
+                df["offset_az"].to_numpy(float),
+                args.input_offset_unit
+            )
+            df["offset_el"] = _to_deg_from_unit(
+                df["offset_el"].to_numpy(float),
+                args.input_offset_unit
+            )
+            tmp_path = work_path + ".deg.tmp.tsv"
+            df.to_csv(tmp_path, sep="\t", index=False)
+            work_path = tmp_path
+
+        bundle = fit_models_from_tsv(
+            path=work_path,
+            degree=args.degree,
+            zscore_az=args.zscore_az,
+            zscore_el=args.zscore_el,
+            ridge_alpha=args.ridge_alpha,
+            notes=args.notes,
+            fourier_k=args.fourier_k,
+            periods_deg=_parse_csv_floats(args.periods_deg),
+            sector_edges_deg=_parse_csv_floats(args.sector_edges_deg),
+        )
+
+        stem = _stem(path)
+
+        # Decide save path for model:
+        # - If user provided --save-model AND multiple inputs: insert _{stem} before
+        #   extension
+        # - If user provided --save-model AND single input: use exactly that path
+        # - Else (no save-model given): DEFAULT to models/{stem}.joblib
+        if args.save_model:
+            if len(tsv_paths) > 1:
+                model_path = _insert_stem_before_ext(args.save_model, stem)
+            else:
+                model_path = args.save_model
+        else:
+            model_path = _default_model_path_for_stem(stem)
+
+        _ensure_dir(model_path)
+        save_model_bundle(bundle, model_path)
+        print(f"Saved model: {model_path}")
+
+        # Always write a summary text file
+        if args.summary:
+            # User-provided path, possibly multi-file adjusted
+            summ_path = args.summary
+            if len(tsv_paths) > 1:
+                summ_path = _insert_stem_before_ext(args.summary, stem)
+        else:
+            # Default: models/{stem}_summary.txt
+            summ_path = os.path.join(_default_models_dir(), f"{stem}_summary.txt")
+
+        _ensure_dir(summ_path)
+        with open(summ_path, "w", encoding="utf-8") as f:
+            f.write(model_summary(bundle))
+        print(f"Wrote summary: {summ_path}")
+
+        # Always save per-file plots by default into models/
+        dfp = read_offsets_tsv(work_path)
+        az = (dfp["azimuth"].to_numpy(float) % 360.0)
+        off_az = dfp["offset_az"].to_numpy(float)
+        off_el = dfp["offset_el"].to_numpy(float)
+        az_lin, cut, lo, hi = unwrap_azimuth(az)
+
+        # Recompute robust masks using thresholds from metadata
+        yhat_az = bundle.az_model(az_lin)
+        res_az = off_az - yhat_az
+        yhat_el = bundle.el_model(az_lin)
+        res_el = off_el - yhat_el
+        def mad(x):
+            med = np.median(x)
+            m = np.median(np.abs(x - med))
+            return 1.4826 * m if m > 0 else 0.0
+        def mk_mask(res, thr):
+            s = mad(res)
+            if s == 0.0:
+                return np.ones_like(res, dtype=bool)
+            return np.abs(res) <= thr * s
+
+        thr_az = getattr(bundle.meta, "zscore_az", args.zscore_az)
+        thr_el = getattr(bundle.meta, "zscore_el", args.zscore_el)
+        m_az = mk_mask(res_az, thr_az)
+        m_el = mk_mask(res_el, thr_el)
+
+        # Create figures and save to models/ as {stem}_az.png and {stem}_el.png
+        fig1, ax1 = plt.subplots(figsize=(7, 4))
+        _plot_fit(
+                ax1,
+                az_lin,
+                off_az,
+                bundle.az_model,
+                m_az, unit=args.plot_unit, label_y="offset_az", bundle=bundle)
+        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        _plot_fit(ax2, az_lin, off_el, bundle.el_model, m_el, unit=args.plot_unit,
+                label_y="offset_el", bundle=bundle)
+
+        # Title per-file with fit parameters
+        meta = bundle.meta
+        title = (
+            f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
+            f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
+        )
+
+        fig1.suptitle(title, fontsize=9)
+        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # keep space after title
+        fig2.suptitle(title, fontsize=9)
+        fig2.tight_layout(rect=[0, 0, 1, 0.99])
+
+        f1, f2 = _default_plot_paths_for_stem(stem)
+        fig1.savefig(f1, dpi=300, bbox_inches="tight")
+        fig2.savefig(f2, dpi=300, bbox_inches="tight")
+        plt.close(fig1)
+        plt.close(fig2)
+        print(f"Saved plots: {f1} , {f2}")
+
+        # track for combined
+        bundles.append((stem, bundle, path, az_lin, off_az, off_el))
+
+        # Clean temp, if any
+        if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
+            os.remove(work_path)
+
+    # Combined curves-only plot if multiple inputs
+    if len(bundles) > 1:
+        # Sorted by stem for deterministic naming
+        stems_sorted = sorted([s for (s, *_rest) in bundles])
+        name_base = "+".join(stems_sorted)
+
+        # Base directory: DEFAULT models/
+        base_path = os.path.join(_default_models_dir(), name_base + ".png")
+        root, ext = os.path.splitext(base_path)
+        f1 = f"{root}_az{ext}"
+        f2 = f"{root}_el{ext}"
+
+        # AZ combined
+        fig1, ax1 = plt.subplots(figsize=(7, 4))
+        fac = _axis_factor_for_unit(args.plot_unit)
+        titles = []
+        for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
+            xs = np.linspace(az_lin.min(), az_lin.max(), 600)
+            # legenda: solo lo stem (nome file)
+            ax1.plot(xs, bundle.az_model(xs) * fac, linewidth=2.0, label=stem)
+            # parametri: accumulati per il titolo cumulativo
+            meta = bundle.meta
+            titles.append(
+                f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
+                f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
+            )
+
+        ax1.set_xlabel("az_lin (deg)")
+        ax1.set_ylabel(f"offset_az ({args.plot_unit})")
+        ax1.grid(True, alpha=0.25)
+        ax1.legend()
+        # titolo cumulativo
+        fig1.suptitle("  —  ".join(titles), fontsize=9)
+        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # lascia spazio al titolo
+        fig1.savefig(f1, dpi=300, bbox_inches="tight")
+        plt.close(fig1)
+
+        # EL combined
+        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        fac = _axis_factor_for_unit(args.plot_unit)
+        titles = []
+        for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
+            xs = np.linspace(az_lin.min(), az_lin.max(), 600)
+            ax2.plot(xs, bundle.el_model(xs) * fac, linewidth=2.0, label=stem)
+            meta = bundle.meta
+            titles.append(
+                f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
+                f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
+            )
+        ax2.set_xlabel("az_lin (deg)")
+        ax2.set_ylabel(f"offset_el ({args.plot_unit})")
+        ax2.grid(True, alpha=0.25)
+        ax2.legend()
+        fig2.suptitle("  —  ".join(titles), fontsize=9)
+        fig2.tight_layout(rect=[0, 0, 1, 0.99])
+        fig2.savefig(f2, dpi=300, bbox_inches="tight")
+        plt.close(fig2)
+
+    return 0
+
+
+def cmd_predict(args: argparse.Namespace) -> int:
+    bundle = load_model_bundle(args.model)
+    off_az, off_el = predict_offsets_deg(
+        bundle,
+        az_deg=args.az,
+        allow_extrapolation=args.allow_extrapolation
+    )
+    if args.unit == "arcmin":
+        off_az = off_az * 60
+        off_el = off_el * 60
+    elif args.unit == "arcsec":
+        off_az = off_az * 3600
+        off_el = off_el * 3600
+    else:
+        pass
+
+    output = (
+        f"az={args.az:.4f}°  ->  offset_az={off_az:.4f} {args.unit}, "
+        f"offset_el={off_el:.4f} {args.unit}"
+    )
+    print(output)
+    return 0
 
 
 def _plot_fit(
-    df, models, degree: int, zscore: float, out_png: str | None, plot_unit: str = "deg"
+    ax,
+    az_lin: np.ndarray,
+    y: np.ndarray,
+    model,
+    keep_mask: np.ndarray,
+    unit: str,
+    label_y: str,
+    bundle=None,
 ):
-    """Plot raw, filtered, and fitted curves for both offsets vs azimuth."""
-    import matplotlib.pyplot as plt  # lazy import
+    """
+    Plot scatter (outliers/inliers) and fitted curve, rendering in the requested unit.
+    NOTE: The fitted-curve label is just 'fit' (no hyperparameters here).
+          Put hyperparameters in the figure title outside this function.
+    """
+    # conversion factor for rendering (deg -> chosen unit)
+    fac = _axis_factor_for_unit(unit)
 
-    az = df["azimuth"].to_numpy(dtype=float)
-    off_az = df["offset_az"].to_numpy(dtype=float)
-    off_el = df["offset_el"].to_numpy(dtype=float)
+    az_lin = np.asarray(az_lin)
+    y = np.asarray(y)
+    keep_mask = np.asarray(keep_mask).astype(bool)
+    if keep_mask.shape != y.shape:
+        raise ValueError("keep_mask must have same shape as y")
 
-    m_az, m_el = models.az_model, models.el_model
-    grid = np.linspace(np.min(az), np.max(az), 400)
+    # inliers / outliers masks
+    m_in = keep_mask
+    m_out = ~keep_mask
 
-    mask_az = _remove_outliers_z(off_az, zscore)
-    mask_el = _remove_outliers_z(off_el, zscore)
+    # scatter points
+    if np.any(m_out):
+        ax.scatter(
+            az_lin[m_out],
+            y[m_out] * fac,
+            s=24,
+            alpha=0.35,
+            label="outliers",
+        )
+    if np.any(m_in):
+        ax.scatter(
+            az_lin[m_in],
+            y[m_in] * fac,
+            s=24,
+            alpha=0.85,
+            label="inliers",
+        )
 
-    # Convert degrees into requested plot unit
-    fac = _deg_to_factor(plot_unit)
-    off_az_p = off_az * fac
-    off_el_p = off_el * fac
-    m_az_p = m_az(grid) * fac
-    m_el_p = m_el(grid) * fac
+    # fitted curve (label short, without params)
+    xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
+    ax.plot(xs, model(xs) * fac, linewidth=2.0, label="fit")
 
-    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+    # axes
+    ax.set_xlabel("az_lin (deg)")
+    ax.set_ylabel(f"{label_y} ({unit})")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
 
-    # Left: offset_az
-    ax = axs[0]
-    ax.scatter(az, off_az_p, s=8, alpha=0.35, label="raw")
-    ax.scatter(az[mask_az], off_az_p[mask_az], s=10, alpha=0.9, label="kept")
-    ax.plot(grid, m_az_p, lw=1.5, label=f"fit (deg={degree})")
-    ax.set_title("offset_az vs azimuth")
-    ax.set_xlabel("azimuth [deg]")
-    ax.set_ylabel(f"offset_az [{plot_unit}]")
-    ax.grid(True, ls=":")
-    ax.legend(loc="best", fontsize=8)
 
-    # Right: offset_el
-    ax = axs[1]
-    ax.scatter(az, off_el_p, s=8, alpha=0.35, label="raw")
-    ax.scatter(az[mask_el], off_el_p[mask_el], s=10, alpha=0.9, label="kept")
-    ax.plot(grid, m_el_p, lw=1.5, label=f"fit (deg={degree})")
-    ax.set_title("offset_el vs azimuth")
-    ax.set_xlabel("azimuth [deg]")
-    ax.set_ylabel(f"offset_el [{plot_unit}]")
-    ax.grid(True, ls=":")
-    ax.legend(loc="best", fontsize=8)
+def cmd_summary(args: argparse.Namespace) -> int:
+    bundle = load_model_bundle(args.model)
+    print(model_summary(bundle))
+    return 0
 
-    fig.tight_layout()
-    if out_png:
-        _ensure_parent_dir(out_png)
-        fig.savefig(out_png, dpi=150)
-    plt.show()
 
+# ----
+# Main
+# ----
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser."""
     p = argparse.ArgumentParser(
-        prog="az_model_cli.py",
-        description=(
-            "Fit azimuth-only offset models from a TSV file, or predict both "
-            "offsets at a given azimuth using saved models."
-        ),
+        description="Azimuth-only pointing model with linearized azimuth",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument(
+    sub = p.add_subparsers(dest="command", required=True)
+
+    # fit
+    pf = sub.add_parser(
+        "fit",
+        help="Fit models from a TSV (offsets in degrees by default)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    pf.add_argument(
         "tsv",
-        nargs="?",
-        help=(
-            "Path to TSV with columns: azimuth, offset_az, offset_el. "
-            "Use with fit mode."
-        ),
+        nargs="+",
+        help="Input TSV path"
     )
-    p.add_argument(
+    pf.add_argument(
         "--degree",
         type=int,
         default=3,
-        help="Polynomial degree for both az and el models (default: 3).",
+        help="Polynomial degree"
     )
-    p.add_argument(
-        "--zscore",
+    pf.add_argument(
+        "--zscore-az",
         type=float,
-        default=3.0,
-        help="Outlier rejection threshold on |z| (default: 3.0).",
+        default=2.5,
+        help="MAD-based z-score threshold for offset_az residuals"
     )
-    p.add_argument(
+    pf.add_argument(
+        "--zscore-el",
+        type=float,
+        default=2.5,
+        help="MAD-based z-score threshold for offset_el residuals"
+    )
+    pf.add_argument(
+        "--ridge-alpha",
+        type=float,
+        default=0.01,
+        help="Ridge regularization strength"
+    )
+    pf.add_argument(
+        "--fourier-k", type=int, default=0,
+        help="Number of Fourier harmonics (k=1..K). 0 disables them."
+    )
+    pf.add_argument(
+        "--periods-deg", default="",
+        help="Comma-separated custom periods in degrees (e.g., 6,11.25)."
+    )
+    pf.add_argument(
+        "--sector-edges-deg", default="",
+        help="Comma-separated sector edges in degrees (e.g., 60,210)."
+    )
+    pf.add_argument(
         "--input-offset-unit",
         choices=["deg", "arcmin", "arcsec"],
         default="deg",
-        help=(
-            "Unit of offset_az/offset_el in the input TSV (default: deg). "
-            "Use 'arcmin' or 'arcsec' if your file stores those units."
-        ),
-    )
-    p.add_argument(
-        "--save-az-model",
-        default="models/az_model.joblib",
-        help=(
-            "Output path for the azimuth model file (default: models/az_model.joblib)."
-        ),
-    )
-    p.add_argument(
-        "--save-el-model",
-        default="models/el_model.joblib",
-        help=(
-            "Output path for the elevation model file (default: "
-            "models/el_model.joblib)."
-        ),
-    )
-    p.add_argument(
-        "--summary",
+        help="Unit of offsets in the TSV")
+    pf.add_argument(
+        "--save-model",
         default=None,
-        help="Optional path to save a human-readable fit summary.",
+        help="Output .joblib bundle path"
     )
-    p.add_argument(
-        "--plot",
-        action="store_true",
-        help="Show a plot window with raw, kept, and fitted curves.",
-    )
-    p.add_argument(
-        "--plot-file",
+    pf.add_argument("--summary",
         default=None,
-        help="Optional PNG path to save the plot figure.",
+        help="Optional path to write a textual summary"
     )
-    p.add_argument(
+    pf.add_argument(
+        "--notes",
+        default=None,
+        help="Optional free-form note saved into metadata"
+    )
+    pf.add_argument(
         "--plot-unit",
         choices=["deg", "arcmin", "arcsec"],
-        default="deg",
-        help=(
-            "Unit for y-axis in plots (default: deg). Values are converted "
-            "from degrees."
-        ),
+        default="arcmin",
+        help="Rendering unit for auto-saved plots in `fit` (Y axis)"
     )
-    p.add_argument(
-        "--predict",
+    pf.set_defaults(func=cmd_fit)
+
+
+    # predict
+    pp = sub.add_parser(
+        "predict",
+        help="Predict offsets at a given azimuth (degrees)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    pp.add_argument(
+        "model",
+        help="Path to .joblib bundle"
+    )
+    pp.add_argument(
+        "--az",
         type=float,
-        default=None,
-        help=(
-            "Predict mode: azimuth in degrees at which to predict both offsets. "
-            "If set, fitting is skipped and saved models are loaded."
-        ),
+        required=True,
+        help="Azimuth in degrees (0..360)"
     )
-    p.add_argument(
-        "--az-model",
-        default="models/az_model.joblib",
-        help=(
-            "Path to a saved azimuth model (used only with --predict). "
-            "Default: models/az_model.joblib"
-        ),
+    pp.add_argument(
+        "--unit",
+        choices=["deg", "arcmin", "arcsec"],
+        default="arcmin",
+        help="Offsets unit"
     )
-    p.add_argument(
-        "--el-model",
-        default="models/el_model.joblib",
-        help=(
-            "Path to a saved elevation model (used only with --predict). "
-            "Default: models/el_model.joblib"
-        ),
+    pp.add_argument(
+        "--allow-extrapolation",
+        action="store_true",
+        help="Allow evaluation outside the observed linear azimuth range"
     )
+    pp.set_defaults(func=cmd_predict)
+
+    # summary
+    ps = sub.add_parser(
+        "summary",
+        help="Print model summary",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    ps.add_argument(
+        "model",
+        help="Path to .joblib bundle"
+    )
+    ps.set_defaults(func=cmd_summary)
+
     return p
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    """Run the CLI."""
+def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-
-    if args.predict is not None:
-        # Prediction mode
-        az_model, el_model = load_models(args.az_model, args.el_model)
-        off_az_deg, off_el_deg = predict_offsets_deg(az_model, el_model, args.predict)
-        print(f"Input azimuth [deg]: {args.predict:.6f}")
-        print(f"Predicted offset_az [deg]: {off_az_deg:.6f}")
-        print(f"Predicted offset_el [deg]: {off_el_deg:.6f}")
-        return 0
-
-    # Fit mode
-    if not args.tsv:
-        parser.error("the following arguments are required for fit mode: tsv")
-
-    # Read data and convert to degrees for modeling
-    if args.input_offset_unit == "arcmin":
-        df = read_offsets_tsv(args.tsv, input_offset_unit="deg")
-        df["offset_az"] = df["offset_az"] / 60.0
-        df["offset_el"] = df["offset_el"] / 60.0
-    else:
-        df = read_offsets_tsv(args.tsv, input_offset_unit=args.input_offset_unit)
-
-    print("Assuming input offsets unit:", args.input_offset_unit)
-
-    models = fit_models(
-        df["azimuth"],
-        df["offset_az"],
-        df["offset_el"],
-        degree=args.degree,
-        zscore=args.zscore,
-    )
-
-    # Save models
-    _ensure_parent_dir(args.save_az_model)
-    _ensure_parent_dir(args.save_el_model)
-    save_models(models, args.save_az_model, args.save_el_model)
-
-    # Print and optionally save a human-readable summary
-    summary = model_summary(models)
-    print(summary)
-    if args.summary:
-        _ensure_parent_dir(args.summary)
-        with open(args.summary, "w", encoding="utf-8") as f:
-            f.write(summary)
-
-    # Optional plotting
-    if args.plot:
-        _plot_fit(
-            df,
-            models,
-            degree=args.degree,
-            zscore=args.zscore,
-            out_png=args.plot_file,
-            plot_unit=args.plot_unit,
-        )
-
-    return 0
+    return args.func(args)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,16 @@
+# Default parameters for the 2D Gaussian fitting algorithm.
+# These values can be overridden in site or run configurations.
+
+[algo.gauss2d]
+# Half window size in pixels around the detected peak for the 2D Gaussian fit.
+fit_window_pix = 5
+# Standard deviation of the smoothing kernel in pixels applied before peak finding.
+smooth_sigma_pix = 1.0
+# Minimum signal to noise ratio of the peak to accept a detection.
+peak_min_snr = 3.0
+# Background removal method: "none", "median", or "plane".
+background_subtraction = "median"
+# Enable robust fitting to reduce the impact of outliers.
+robust_fit = true
+# Maximum number of iterations of the non linear optimizer.
+max_iter = 50

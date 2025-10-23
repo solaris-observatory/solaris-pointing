@@ -154,7 +154,7 @@ in the *templates* directory at the root of ``solaris-pointing``. Here's
 how to create a pointing model (in this case, of degree 5):
 
 ```bash
-python scripts/az_model_cli.py templates/output_offset_io_example.tsv --degree 5 --plot --plot-file models/fit_plot.png
+python scripts/az_model_cli.py templates/output_offset_io_example.tsv --degree 5 --plot --plot-file output/models/fit_plot.png
 ```
 
 Note that the script ``az_model_cli.py`` creates an **azimuth-only** pointing
@@ -175,33 +175,33 @@ instead.
 
 **Fit and save models (input in degrees, default):**
 ```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --summary models/fit_summary.txt
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --summary output/models/fit_summary.txt
 ```
 
 **Fit when input offsets are in arcminutes or arcseconds:**
 ```bash
 # arcminutes
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcmin     --degree 3     --summary models/fit_summary.txt
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcmin     --degree 3     --summary output/models/fit_summary.txt
 
 # arcseconds
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcsec     --degree 3     --summary models/fit_summary.txt
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcsec     --degree 3     --summary output/models/fit_summary.txt
 ```
 
 **Choose custom output paths for the saved models:**
 ```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --save-az-model custom_models/az_model.joblib     --save-el-model custom_models/el_model.joblib     --summary custom_models/fit_summary.txt
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --save-az-model offsets/custom_models/az_model.joblib     --save-el-model output/custom_models/el_model.joblib     --summary output/custom_models/fit_summary.txt
 ```
 
 **Plot the fit (and optionally save a PNG):**
 ```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --plot     --plot-unit arcmin     --plot-file models/fit_plot.png
+python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --plot     --plot-unit arcmin     --plot-file output/models/fit_plot.png
 ```
 
 **Predict offsets (using saved models):**
 ```bash
 python scripts/az_model_cli.py --predict 125.0
 # or with explicit model paths:
-python scripts/az_model_cli.py     --predict 125.0     --az-model models/az_model.joblib     --el-model models/el_model.joblib
+python scripts/az_model_cli.py     --predict 125.0     --az-model output/models/az_model.joblib     --el-model output/models/el_model.joblib
 ```
 
 ### Applying the model during pointing.
@@ -216,7 +216,7 @@ Here is a summary:
 from solaris_pointing.fitting.az_model import load_models, predict_offsets_deg
 
 ideal_az_deg, ideal_el_deg = 125.0, 40.0
-az_model, el_model = load_models("models/az_model.joblib", "models/el_model.joblib")
+az_model, el_model = load_models("output/models/az_model.joblib", "output/models/el_model.joblib")
 off_az_deg, off_el_deg = predict_offsets_deg(az_model, el_model, ideal_az_deg)
 corr_az_deg, corr_el_deg = ideal_az_deg + off_az_deg, ideal_el_deg + off_el_deg
 print(corr_az_deg, corr_el_deg)

@@ -12,8 +12,8 @@ Requirements
 ------------
 - The models must have been generated beforehand (see scripts/az_model_cli.py)
   and saved as Joblib files:
-  * models/az_model.joblib
-  * models/el_model.joblib
+  * output/models/az_model.joblib
+  * output/models/el_model.joblib
 - All angles in this example are in **degrees**.
 
 What this example does
@@ -37,8 +37,8 @@ from solaris_pointing.fitting.az_model import (
 )
 
 # 1) Load pre-fitted models (produced by your fitting pipeline or CLI).
-AZ_MODEL_PATH = "models/az_model.joblib"
-EL_MODEL_PATH = "models/el_model.joblib"
+AZ_MODEL_PATH = "output/models/az_model.joblib"
+EL_MODEL_PATH = "output/models/el_model.joblib"
 az_model, el_model = load_models(AZ_MODEL_PATH, EL_MODEL_PATH)
 
 # 2) Choose the *ideal* pointing coordinates (what the scheduler would command).
