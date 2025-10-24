@@ -214,6 +214,7 @@ try:
         model_summary,
         read_offsets_tsv,
         unwrap_azimuth,
+        _mad,
     )
 except Exception:
     # Fallback: allow running this CLI "standalone" next to az_model.py
@@ -225,6 +226,7 @@ except Exception:
         model_summary,
         read_offsets_tsv,
         unwrap_azimuth,
+        _mad,
     )
 
 
@@ -481,11 +483,21 @@ def cmd_fit(args: argparse.Namespace) -> int:
         fig1, ax1 = plt.subplots(figsize=(7, 4))
         fac = _axis_factor_for_unit(args.plot_unit)
         titles = []
+
+        # For each input file, plot its model curve and show MAD over ALL points
         for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
-            xs = np.linspace(az_lin.min(), az_lin.max(), 600)
-            # legenda: solo lo stem (nome file)
-            ax1.plot(xs, bundle.az_model(xs) * fac, linewidth=2.0, label=stem)
-            # parametri: accumulati per il titolo cumulativo
+            # Compute residuals on ALL samples for this file (total dispersion)
+            res_tot = (off_az - bundle.az_model(az_lin)) * fac
+            mad_tot = _mad(res_tot)
+
+            # Label shows file stem + MAD over all points (robust to outliers)
+            lbl = f"{stem} (MAD={mad_tot:.3g})"
+
+            # Plot model curve over the observed az_lin range
+            xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
+            ax1.plot(xs, bundle.az_model(xs) * fac, linewidth=2.0, label=lbl)
+
+            # Collect per-file parameters for the combined title
             meta = bundle.meta
             titles.append(
                 f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
@@ -496,9 +508,8 @@ def cmd_fit(args: argparse.Namespace) -> int:
         ax1.set_ylabel(f"offset_az ({args.plot_unit})")
         ax1.grid(True, alpha=0.25)
         ax1.legend()
-        # titolo cumulativo
         fig1.suptitle("  —  ".join(titles), fontsize=9)
-        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # lascia spazio al titolo
+        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # give space to the title
         fig1.savefig(f1, dpi=300, bbox_inches="tight")
         plt.close(fig1)
 
@@ -506,22 +517,39 @@ def cmd_fit(args: argparse.Namespace) -> int:
         fig2, ax2 = plt.subplots(figsize=(7, 4))
         fac = _axis_factor_for_unit(args.plot_unit)
         titles = []
+        # For each input file, plot EL model and MAD over ALL points (elevation)
         for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
-            xs = np.linspace(az_lin.min(), az_lin.max(), 600)
-            ax2.plot(xs, bundle.el_model(xs) * fac, linewidth=2.0, label=stem)
+            # Residuals on ALL samples for elevation
+            res_tot_el = (off_el - bundle.el_model(az_lin)) * fac
+            mad_tot_el = _mad(res_tot_el)
+
+            # Optional: show MAD for elevation as well
+            lbl = f"{stem} (MAD={mad_tot_el:.3g})"
+
+            xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
+            ax2.plot(xs, bundle.el_model(xs) * fac, linewidth=2.0, label=lbl)
+
             meta = bundle.meta
             titles.append(
                 f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
                 f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
             )
-        ax2.set_xlabel("az_lin (deg)")
-        ax2.set_ylabel(f"offset_el ({args.plot_unit})")
-        ax2.grid(True, alpha=0.25)
-        ax2.legend()
+
+        ax2.set_xlabel("az_lin (deg)")  # X-axis label for combined elevation plot
+        ax2.set_ylabel(f"offset_el ({args.plot_unit})")  # Y-axis in chosen unit
+        ax2.grid(True, alpha=0.25)  # light grid for readability
+        ax2.legend()  # show per-file labels with MAD
+
+        # Compose a compact title summarizing per-file fit parameters
         fig2.suptitle("  —  ".join(titles), fontsize=9)
+
+        # Keep room for the title and save the figure to the _el path
         fig2.tight_layout(rect=[0, 0, 1, 0.99])
         fig2.savefig(f2, dpi=300, bbox_inches="tight")
         plt.close(fig2)
+
+        # Inform the user that combined plots were saved
+        print(f"Saved combined plots: {f1} , {f2}")  # combined az/el
 
     return 0
 
@@ -575,6 +603,11 @@ def _plot_fit(
     m_in = keep_mask
     m_out = ~keep_mask
 
+    res = (y - model(az_lin)) * fac
+
+    lbl_in = f"inliers"
+    lbl_out = f"outliers"
+
     # scatter points
     if np.any(m_out):
         ax.scatter(
@@ -582,7 +615,7 @@ def _plot_fit(
             y[m_out] * fac,
             s=24,
             alpha=0.35,
-            label="outliers",
+            label=lbl_out,
         )
     if np.any(m_in):
         ax.scatter(
@@ -590,12 +623,13 @@ def _plot_fit(
             y[m_in] * fac,
             s=24,
             alpha=0.85,
-            label="inliers",
+            label=lbl_in,
         )
+
 
     # fitted curve (label short, without params)
     xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
-    ax.plot(xs, model(xs) * fac, linewidth=2.0, label="fit")
+    ax.plot(xs, model(xs) * fac, linewidth=2.0, label=f"fit (MAD={_mad(res):.2g})")
 
     # axes
     ax.set_xlabel("az_lin (deg)")

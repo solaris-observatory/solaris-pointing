@@ -580,6 +580,10 @@ class ModelBundle:
     el_model: Any
     meta: ModelMetadata
     diag: FitDiagnostics
+    az_lin: np.ndarray
+    offset_az: np.ndarray
+    offset_el: np.ndarray
+
 
 def _two_pass_fit(
     x: np.ndarray,
@@ -712,7 +716,15 @@ def fit_models_from_tsv(
         mae_el_deg=mae_el,
     )
 
-    return ModelBundle(az_model=m_az, el_model=m_el, meta=meta, diag=diag)
+    return ModelBundle(
+        az_model=m_az,
+        el_model=m_el,
+        meta=meta,
+        diag=diag,
+        az_lin=az_lin,
+        offset_az=off_az,
+        offset_el=off_el,
+    )
 
 
 def _unwrap_single(az_deg: float, cut_deg: float) -> float:
