@@ -138,13 +138,13 @@ Harmonic and sector modeling
 -------------------------------------------------------------------------------
 Harmonics (`fourier-k`) add sin(k·A) and cos(k·A) with A the wrapped azimuth,
 to describe smooth periodic effects over one revolution (0–360°). They are
-useful when cyclic sources exist — encoder eccentricities, gear errors,
+useful when cyclic sources exist -- encoder eccentricities, gear errors,
 cable-wrap torsions, etc. The model adapts to repeating oscillations
 over azimuth.
 
 - **Custom periods** (`periods-deg`): specify explicit periods P (in degrees)
   for the harmonic terms (sin/cos with period P). This focuses the model on
-  physically meaningful frequencies — e.g., a 360/N gear tooth pattern —
+  physically meaningful frequencies -- e.g., a 360/N gear tooth pattern --
   reducing aliasing and improving interpretability.
 
 - **Sector edges** (`sector-edges-deg`): define boundaries (in degrees) that
@@ -332,7 +332,8 @@ def cmd_fit(args: argparse.Namespace) -> int:
     # Accept multiple TSV inputs
     raw_paths = args.tsv if isinstance(args.tsv, (list, tuple)) else [args.tsv]
     tsv_paths = [_resolve_input_tsv(p) for p in raw_paths]
-    bundles = []  # (stem, bundle, tsv_path, az_lin, off_az, off_el)
+    # (stem, bundle, path, az_lin, off_az, off_el, period_tuple)
+    bundles: list[tuple[str, any, str, np.ndarray, np.ndarray, np.ndarray, tuple[str|None, str|None]]] = []
 
     # Ensure output base directory exists (models/) for defaults
     os.makedirs(_default_models_dir(), exist_ok=True)
@@ -340,17 +341,15 @@ def cmd_fit(args: argparse.Namespace) -> int:
     # Fit per file
     for path in tsv_paths:
         work_path = path
-        # Unit conversion to degrees if requested
+
+        # Optional unit conversion to degrees
         if args.input_offset_unit != "deg":
-            df = read_offsets_tsv(work_path)
-            df = df.copy()
+            df = read_offsets_tsv(work_path).copy()
             df["offset_az"] = _to_deg_from_unit(
-                df["offset_az"].to_numpy(float),
-                args.input_offset_unit
+                df["offset_az"].to_numpy(float), args.input_offset_unit
             )
             df["offset_el"] = _to_deg_from_unit(
-                df["offset_el"].to_numpy(float),
-                args.input_offset_unit
+                df["offset_el"].to_numpy(float), args.input_offset_unit
             )
             tmp_path = work_path + ".deg.tmp.tsv"
             df.to_csv(tmp_path, sep="\t", index=False)
@@ -370,16 +369,10 @@ def cmd_fit(args: argparse.Namespace) -> int:
 
         stem = _stem(path)
 
-        # Decide save path for model:
-        # - If user provided --save-model AND multiple inputs: insert _{stem} before
-        #   extension
-        # - If user provided --save-model AND single input: use exactly that path
-        # - Else (no save-model given): DEFAULT to models/{stem}.joblib
+        # Decide save path for model
         if args.save_model:
-            if len(tsv_paths) > 1:
-                model_path = _insert_stem_before_ext(args.save_model, stem)
-            else:
-                model_path = args.save_model
+            model_path = _insert_stem_before_ext(args.save_model, stem) \
+                if len(tsv_paths) > 1 else args.save_model
         else:
             model_path = _default_model_path_for_stem(stem)
 
@@ -387,14 +380,11 @@ def cmd_fit(args: argparse.Namespace) -> int:
         save_model_bundle(bundle, model_path)
         print(f"Saved model: {model_path}")
 
-        # Always write a summary text file
+        # Summary path
         if args.summary:
-            # User-provided path, possibly multi-file adjusted
-            summ_path = args.summary
-            if len(tsv_paths) > 1:
-                summ_path = _insert_stem_before_ext(args.summary, stem)
+            summ_path = _insert_stem_before_ext(args.summary, stem) \
+                if len(tsv_paths) > 1 else args.summary
         else:
-            # Default: models/{stem}_summary.txt
             summ_path = os.path.join(_default_models_dir(), f"{stem}_summary.txt")
 
         _ensure_dir(summ_path)
@@ -402,22 +392,49 @@ def cmd_fit(args: argparse.Namespace) -> int:
             f.write(model_summary(bundle))
         print(f"Wrote summary: {summ_path}")
 
-        # Always save per-file plots by default into models/
+        # Read back data for plotting & period detection
         dfp = read_offsets_tsv(work_path)
         az = (dfp["azimuth"].to_numpy(float) % 360.0)
         off_az = dfp["offset_az"].to_numpy(float)
         off_el = dfp["offset_el"].to_numpy(float)
         az_lin, cut, lo, hi = unwrap_azimuth(az)
 
+        # --- Compute (YY/MM/DD -- YY/MM/DD) period tuple for this file ---
+        period_tuple: tuple[str | None, str | None] = (None, None)
+        try:
+            cols = [c.strip() for c in dfp.columns]
+            if "timestamp" in cols:
+                s = dfp["timestamp"].astype(str).str.strip()
+                ts = pd.to_datetime(s, utc=True, errors="coerce")
+                if ts.isna().all():
+                    ts = pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ",
+                                        utc=True, errors="coerce")
+                if ts.isna().all():
+                    ts = pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%SZ",
+                                        utc=True, errors="coerce")
+                if ts.isna().all():
+                    ts = pd.to_datetime(s.str.replace("Z", "+00:00", regex=False),
+                                        utc=True, errors="coerce")
+                ts = ts.dropna()
+                if len(ts) > 0:
+                    oldest = ts.min().to_pydatetime()
+                    newest = ts.max().to_pydatetime()
+                    period_tuple = (f"{oldest:%y/%m/%d}", f"{newest:%y/%m/%d}")
+        except Exception:
+            period_tuple = (None, None)
+        # ---------------------------------------------------------------------
+
         # Recompute robust masks using thresholds from metadata
         yhat_az = bundle.az_model(az_lin)
         res_az = off_az - yhat_az
         yhat_el = bundle.el_model(az_lin)
         res_el = off_el - yhat_el
+
         def mad(x):
             med = np.median(x)
             m = np.median(np.abs(x - med))
             return 1.4826 * m if m > 0 else 0.0
+
         def mk_mask(res, thr):
             s = mad(res)
             if s == 0.0:
@@ -429,127 +446,136 @@ def cmd_fit(args: argparse.Namespace) -> int:
         m_az = mk_mask(res_az, thr_az)
         m_el = mk_mask(res_el, thr_el)
 
-        # Create figures and save to models/ as {stem}_az.png and {stem}_el.png
+        # Figures per file
         fig1, ax1 = plt.subplots(figsize=(7, 4))
-        _plot_fit(
-                ax1,
-                az_lin,
-                off_az,
-                bundle.az_model,
-                m_az, unit=args.plot_unit, label_y="offset_az", bundle=bundle)
+        _plot_fit(ax1, az_lin, off_az, bundle.az_model, m_az,
+                  unit=args.plot_unit, label_y="offset_az", bundle=bundle)
         fig2, ax2 = plt.subplots(figsize=(7, 4))
-        _plot_fit(ax2, az_lin, off_el, bundle.el_model, m_el, unit=args.plot_unit,
-                label_y="offset_el", bundle=bundle)
+        _plot_fit(ax2, az_lin, off_el, bundle.el_model, m_el,
+                  unit=args.plot_unit, label_y="offset_el", bundle=bundle)
 
-        # Title per-file with fit parameters
         meta = bundle.meta
-        title = (
-            f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
+        params_line = (
+            f"degree={meta.degree}, α={meta.ridge_alpha:g}, "
             f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
         )
 
-        fig1.suptitle(title, fontsize=9)
-        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # keep space after title
-        fig2.suptitle(title, fontsize=9)
-        fig2.tight_layout(rect=[0, 0, 1, 0.99])
+        # ---- Titles for single-file plots ----
+        if period_tuple[0] and period_tuple[1]:
+            top_line = f"{stem}: ({period_tuple[0]} -- {period_tuple[1]})"
+        else:
+            top_line = stem
 
         f1, f2 = _default_plot_paths_for_stem(stem)
+        for fig in (fig1, fig2):
+            fig.subplots_adjust(top=0.86, bottom=0.13)
+            fig.suptitle(top_line, fontsize=8, y=0.97)
+            fig.text(0.5, 0.930, params_line, ha="center", va="top", fontsize=8)
+
         fig1.savefig(f1, dpi=300, bbox_inches="tight")
         fig2.savefig(f2, dpi=300, bbox_inches="tight")
         plt.close(fig1)
         plt.close(fig2)
         print(f"Saved plots: {f1} , {f2}")
 
-        # track for combined
-        bundles.append((stem, bundle, path, az_lin, off_az, off_el))
+        # Track for combined (include period_tuple)
+        bundles.append((stem, bundle, path, az_lin, off_az, off_el, period_tuple))
 
         # Clean temp, if any
         if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
             os.remove(work_path)
 
-    # Combined curves-only plot if multiple inputs
+    # -------------------------------
+    # Combined curves-only plot
+    # -------------------------------
     if len(bundles) > 1:
         # Sorted by stem for deterministic naming
-        stems_sorted = sorted([s for (s, *_rest) in bundles])
+        bundles_sorted = sorted(bundles, key=lambda t: t[0])
+        stems_sorted = [t[0] for t in bundles_sorted]
         name_base = "+".join(stems_sorted)
 
-        # Base directory: DEFAULT models/
         base_path = os.path.join(_default_models_dir(), name_base + ".png")
         root, ext = os.path.splitext(base_path)
         f1 = f"{root}_az{ext}"
         f2 = f"{root}_el{ext}"
 
-        # AZ combined
+        # Determine if all periods are identical and non-None
+        periods = [t[6] for t in bundles_sorted]
+        def _period_equal(p1, p2):
+            return (p1[0] is not None and p1[1] is not None and
+                    p2[0] is not None and p2[1] is not None and
+                    p1[0] == p2[0] and p1[1] == p2[1])
+
+        all_equal = False
+        common_period: tuple[str|None, str|None] = (None, None)
+        if periods and periods[0][0] and periods[0][1]:
+            all_equal = all(_period_equal(periods[0], p) for p in periods)
+            if all_equal:
+                common_period = periods[0]
+
+        # Title (top): only file names; if periods differ, show period per name.
+        if all_equal:
+            top_title = "  +  ".join(stems_sorted)
+        else:
+            decorated = []
+            for (stem, _, _, _, _, _, per) in bundles_sorted:
+                if per[0] and per[1]:
+                    decorated.append(f"{stem}: ({per[0]} -- {per[1]})")
+                else:
+                    decorated.append(stem)
+            top_title = "  +  ".join(decorated)
+
+        # Sub-title (centered line below): always parameters ONCE.
+        # If periods are identical, append the common period here.
+        meta0 = bundles_sorted[0][1].meta
+        params_line = (
+            f"degree={meta0.degree}, α={meta0.ridge_alpha:g}, "
+            f"zA={meta0.zscore_az:g}, zE={meta0.zscore_el:g}, f={meta0.fourier_k:g}"
+        )
+        if all_equal and common_period[0] and common_period[1]:
+            params_line = f"{params_line}     ({common_period[0]} -- {common_period[1]})"
+
+        # ---- AZ combined ----
         fig1, ax1 = plt.subplots(figsize=(7, 4))
         fac = _axis_factor_for_unit(args.plot_unit)
-        titles = []
 
-        # For each input file, plot its model curve and show MAD over ALL points
-        for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
-            # Compute residuals on ALL samples for this file (total dispersion)
+        for (stem, bundle, path, az_lin, off_az, off_el, _per) in bundles_sorted:
             res_tot = (off_az - bundle.az_model(az_lin)) * fac
-            mad_tot = _mad(res_tot)
-
-            # Label shows file stem + MAD over all points (robust to outliers)
-            lbl = f"{stem} (MAD={mad_tot:.3g})"
-
-            # Plot model curve over the observed az_lin range
+            lbl = f"{stem} (MAD={_mad(res_tot):.2g})"
             xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
             ax1.plot(xs, bundle.az_model(xs) * fac, linewidth=2.0, label=lbl)
-
-            # Collect per-file parameters for the combined title
-            meta = bundle.meta
-            titles.append(
-                f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
-                f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
-            )
 
         ax1.set_xlabel("az_lin (deg)")
         ax1.set_ylabel(f"offset_az ({args.plot_unit})")
         ax1.grid(True, alpha=0.25)
         ax1.legend()
-        fig1.suptitle("  —  ".join(titles), fontsize=9)
-        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # give space to the title
+
+        fig1.subplots_adjust(top=0.86, bottom=0.13)
+        fig1.suptitle(top_title, fontsize=8, y=0.97)
+        fig1.text(0.5, 0.930, params_line, ha="center", va="top", fontsize=8)
         fig1.savefig(f1, dpi=300, bbox_inches="tight")
         plt.close(fig1)
 
-        # EL combined
+        # ---- EL combined ----
         fig2, ax2 = plt.subplots(figsize=(7, 4))
-        fac = _axis_factor_for_unit(args.plot_unit)
-        titles = []
-        # For each input file, plot EL model and MAD over ALL points (elevation)
-        for (stem, bundle, path, az_lin, off_az, off_el) in bundles:
-            # Residuals on ALL samples for elevation
+        for (stem, bundle, path, az_lin, off_az, off_el, _per) in bundles_sorted:
             res_tot_el = (off_el - bundle.el_model(az_lin)) * fac
-            mad_tot_el = _mad(res_tot_el)
-
-            # Optional: show MAD for elevation as well
-            lbl = f"{stem} (MAD={mad_tot_el:.3g})"
-
+            lbl = f"{stem} (MAD={_mad(res_tot_el):.2g})"
             xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
             ax2.plot(xs, bundle.el_model(xs) * fac, linewidth=2.0, label=lbl)
 
-            meta = bundle.meta
-            titles.append(
-                f"{stem}: d={meta.degree}, α={meta.ridge_alpha:g}, "
-                f"zA={meta.zscore_az:g}, zE={meta.zscore_el:g}, f={meta.fourier_k:g}"
-            )
+        ax2.set_xlabel("az_lin (deg)")
+        ax2.set_ylabel(f"offset_el ({args.plot_unit})")
+        ax2.grid(True, alpha=0.25)
+        ax2.legend()
 
-        ax2.set_xlabel("az_lin (deg)")  # X-axis label for combined elevation plot
-        ax2.set_ylabel(f"offset_el ({args.plot_unit})")  # Y-axis in chosen unit
-        ax2.grid(True, alpha=0.25)  # light grid for readability
-        ax2.legend()  # show per-file labels with MAD
-
-        # Compose a compact title summarizing per-file fit parameters
-        fig2.suptitle("  —  ".join(titles), fontsize=9)
-
-        # Keep room for the title and save the figure to the _el path
-        fig2.tight_layout(rect=[0, 0, 1, 0.99])
+        fig2.subplots_adjust(top=0.86, bottom=0.13)
+        fig2.suptitle(top_title, fontsize=8, y=0.97)
+        fig2.text(0.5, 0.930, params_line, ha="center", va="top", fontsize=8)
         fig2.savefig(f2, dpi=300, bbox_inches="tight")
         plt.close(fig2)
 
-        # Inform the user that combined plots were saved
-        print(f"Saved combined plots: {f1} , {f2}")  # combined az/el
+        print(f"Saved combined plots: {f1} , {f2}")
 
     return 0
 
