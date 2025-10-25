@@ -1,162 +1,142 @@
-"""Solar pointing offsets.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-Compute telescope pointing offsets in azimuth and elevation (Δaz, Δel) for
-solar raster maps. For each map (identified by a `map_id`), the procedure:
+"""
+Solar pointing offsets — compatibility algorithm (A–D)
+=====================================================
 
-1) segments scans using the `.path` file `F0` flag (runs with `F0 == 1`);
-2) ranks scans via a "central power" metric (mean signal over the whole scan);
-3) estimates the centroid time as the timestamp of the maximum `.sky` signal
-   within the chosen scan (no thresholds, no robust selection);
-4) reads the observed az/el at that time from the nearest `.path` row
-   (no interpolation);
-5) computes the solar ephemeris (az/el) at that time and site using Astropy;
-6) writes one TSV record per map with the observed coordinates and offsets.
+This file implements a **compatibility mode** to mirror the legacy pipeline
+you’re comparing against, applying exactly the points **A–D** discussed:
 
+A) **No interpolation** for observed coordinates:
+   use the **nearest** `.path` sample to the chosen centroid time (instead of
+   interpolating az/el).
+B) **Centroid time per scan**: simple **mean of times** whose **signal ≥ 0.75 ×
+   (scan max)**, computed from `.sky` samples **within that scan’s time range**.
+C) **Which scan to use**: among the scans (F0==1 segments) whose *central
+   power* (mean of the above-threshold samples) is **≥ 0.75 × MaxCentralPower**
+   (MaxCentralPower = max of those “central powers” across scans), pick the
+   **middle one by index** (i.e., the median scan among the selected ones).
+D) **Ephemerides via PySolar** (instead of Astropy).
+
+All other choices are kept minimal and explicit to reduce degrees of freedom.
+This lets you perform **apples-to-apples** comparisons with your legacy
+`main_new.py` flow.
+
+-------------------------------------------------------------------------------
+(Original problem statement and data description)
+-------------------------------------------------------------------------------
 
 Purpose
 -------
-Given a pair of files `<map_id>.path` and `<map_id>.sky`, estimate the
-observed centroid time/position of the Sun from the scan data, compare it
-to the apparent solar position at that time and site, and report offsets:
+Compute telescope pointing offsets in azimuth and elevation (Δaz, Δel) when
+mapping the Sun. Each map consists of a pair of files with the same base name
+(`map_id`) and different extensions: `<map_id>.path` and `<map_id>.sky`. The
+goal is to estimate the observed centroid time/position of the Sun from the
+scan data, compare it to the ideal ephemeris position at that time and site,
+and report the offsets:
 
     Δaz = az_observed_centroid  −  az_ephemeris_centroid
     Δel = el_observed_centroid  −  el_ephemeris_centroid
 
+Context and key idea
+--------------------
+Because the telescope has a non-zero pointing offset, the Sun is not centered
+in the scans. Even in the scan that crosses the true solar center, the signal
+peak does not fall at the geometric center of the scan timeline. We therefore
+(1) identify the scan that most likely passes nearest the solar center and
+(2) estimate the centroid time along that scan using a simple rule.
 
 Input files
 -----------
-Files come in pairs, one pair per map. The file name is the `map_id` and
-only the extension differs.
+Files come in pairs, one pair per map. The file name is the `map_id` and only
+the extension differs.
 
 1) Path file: `<map_id>.path`
-   Tab-separated columns (minimum required):
+   Columns (tab-separated):
 
        Posix_time   ms   UTC                         Azimuth   Elevation
        Azimuth_raw  Elevation_raw   F0   F1
 
-   Fields used by this module:
-   - `UTC` (3rd column): timestamp of the pointing coordinates (ISO-8601, UTC).
+   Example first data row:
+
+       1735761254   310  2025-01-01T19:54:14.310     83.92568  26.04125
+       7822440      2427220          0    0
+
+   Fields used:
+   - `UTC` (3rd column): timestamp of the pointing coordinates.
    - `Azimuth` (4th) and `Elevation` (5th): telescope coordinates at `UTC`.
-   - `F0` (8th): scan flag. `F0 = 1` marks active scan samples; `F0 = 0` is
-     idle/transition. Scans are contiguous runs with `F0 == 1`.
+   - `F0` (8th): scan flag. `F0 = 1` means the telescope is actively scanning
+     (in RA for this dataset). `F0 = 0` means idle/transition. Only rows with
+     `F0 = 1` are used to form scans.
 
 2) Sky file: `<map_id>.sky`
-   Tab-separated columns (minimum required):
+   Columns (tab-separated):
 
        Posix_time   ms   UTC                         Signal
 
-   Fields used by this module:
-   - `UTC` (3rd): timestamp of the signal sample (ISO-8601, UTC).
-   - `Signal` (4th): measured signal (arbitrary units).
+   Example first data row:
 
+       1735761254   334  2025-01-01T19:54:14.334     23166
 
-Temporal alignment
-------------------
-`.path` and `.sky` timestamps need not coincide. For each scan (a run with
-`F0 == 1` in `.path`), `.sky` samples whose `UTC` falls within the scan time
-range are selected and analyzed (no global regridding).
+   Fields used:
+   - `UTC` (3rd): timestamp of signal measurement.
+   - `Signal` (4th): measured signal.
 
+Temporal alignment between files
+--------------------------------
+Timestamps in `.path` and `.sky` do not generally coincide. In this compatibility
+mode we do **not** do a pointwise regridding; instead, for each **scan** (a run
+of `F0 == 1` in the `.path` timeline), we collect `.sky` samples whose `UTC`
+falls **within the time range** of that scan and analyze them.
 
 Scan segmentation
 -----------------
-Scans are contiguous sequences of `.path` rows with `F0 == 1`. Each run defines
-a scan used for centroid estimation and ranking.
+The observation consists of scans in RA. Use `F0` to segment the sequence:
+consecutive rows with `F0 = 1` define a single scan. Between scans, `F0` goes
+to 0; then another `F0 = 1` segment marks the next scan.
 
-
-Centroid time and scan selection
---------------------------------
-With scans ≈ 3× the solar diameter, most samples are off-Sun (low signal) and a
-clear peak appears at the solar crossing. This simplified algorithm avoids any
-robust/local thresholding:
-
-- Before computing scan maxima, each per-scan `.sky` signal is smoothed with a
-  short adaptive moving average (window = max(5, min(0.05 × N, 51)) samples,
-  where N is the number of samples in the scan). This suppresses narrow spikes
-  or glitches that would otherwise dominate the peak detection.
-- The maximum length of the smoothing window is not fixed but derived from the
-  actual sampling cadence of each `.sky` file. The code estimates how many
-  samples correspond to N seconds (default 3) of observation by computing the median
-  time spacing between consecutive `.sky` timestamps. This number defines the upper
-  bound for the adaptive window length (i.e., `window_len = max(5, min(0.05 × N,
-  samples_in_3s))`). As a result, the smoothing automatically adapts to the data
-  rate of each map, ensuring consistent temporal filtering across datasets with
-  different sampling frequencies.
-- Among the scans retained after central-power filtering, the one with the
-  largest integrated signal above the relative peak threshold (the "mass above
-  threshold") is selected. This favors scans that not only reach high power but
-  also maintain it over a wider portion of the scan, corresponding to the
-  telescope's traversal across the central solar disk. This replaces the former
-  "middle-by-index" rule and yields more stable centroid selection.
-- The smoothed signal is used only to determine `scan_max` (the scan peak).
-  Subsequent calculations — thresholding by `REL_PEAK_FRAC` and computation of
-  `central_power` — are applied to the original unsmoothed samples. This yields
-  a robust peak estimate while preserving the true signal shape.
-- **Per-scan central power** = **mean** of all `.sky` `Signal` samples within
-  the scan time window.
-- Across scans, let `MaxCentralPower` be the maximum central power. Keep scans
-  with `central_power ≥ 0.70 × MaxCentralPower`, then choose the **middle one
-  by index** (median in time order) among the kept scans.
-- **Centroid time** for the chosen scan = timestamp of the **maximum `Signal`**
-  (argmax) within that scan window.
-
-No MAD/percentile/thresholds are used; the method relies solely on per-scan mean
-power for ranking and the argmax for timing.
-
-The centroid time is obtained from the maximum of the smoothed signal with a 3-point parabolic refinement, yielding a sub-sample timing estimate independent of threshold selection.
-
-
-Observed coordinates (no interpolation)
----------------------------------------
-The observed azimuth/elevation at the centroid time are taken from the **nearest
-`.path` row in time**. A fixed **azimuth bias of +0.75°** is applied to the
-observed azimuth, and azimuth is wrapped to **[0, 360)**.
-
-
-Solar ephemerides (Astropy)
+Compatibility details (A–D)
 ---------------------------
-The apparent solar position is computed with Astropy:
+A) Observed az/el at the centroid time are taken from the **nearest** `.path`
+   row in time (no interpolation).
+B) The **centroid time** of a scan is the **mean** of the `.sky` timestamps in
+   that scan where `Signal ≥ 0.75 × (scan max)`. Before this, you may apply an
+   **absolute threshold** on `.sky` samples (default `Signal > 30000`) to ignore
+   obvious background.
+C) **Scan choice**: compute a “central power” per scan as the **mean** of the
+   `.sky` values used in (B). Let `MaxCentralPower` be the maximum of these
+   central powers across scans. Keep only scans with
+   `central_power ≥ 0.75 × MaxCentralPower`, and among them pick the **middle
+   one by index** (median in time order).
+D) Ephemerides are computed with **PySolar** (`get_azimuth`, `get_altitude`).
 
-- `astropy.coordinates` with `get_sun` transformed to an `AltAz` frame.
-- Site location: latitude = −74.6933°, longitude = 164.1000°, height = 50 m.
-- Atmospheric/refraction parameters:
-  pressure = 950 hPa, temperature = −5 °C, relative_humidity = 0.2,
-  observing wavelength (`obswl`) = 3 mm.
-- Azimuth is wrapped to [0, 360).
+Azimuth bias and wrapping
+-------------------------
+A fixed **azimuth bias of +0.75°** is applied to the **observed** azimuth, then
+azimuth values are **wrapped to [0, 360)**. Offsets are raw differences:
 
+    Δaz = az_observed_centroid  −  az_ephemeris_centroid
+    Δel = el_observed_centroid  −  el_ephemeris_centroid
 
-Outputs
--------
-For each map (i.e., `<map_id>.path` + `<map_id>.sky`), one TSV record is
-appended containing:
+Minimal outputs
+---------------
+For each map (i.e., `<map_id>.path` + `<map_id>.sky`), append one TSV line with:
 
 - `map_id`
-- `centroid_utc` (ISO-8601, UTC, millisecond precision)
+- `centroid_utc`
 - `azimuth_deg_observed`
 - `elevation_deg_observed`
 - `delta_az_deg`
 - `delta_el_deg`
 
-The file is written via `write_offsets_tsv`, which also includes metadata in
-the header (location, antenna diameter, frequency, software version).
-
-
 Assumptions and conventions
 ---------------------------
-- `.path` az/el are the telescope's pointing coordinates at `UTC`.
+- `.path` az/el are telescope coordinates at `UTC` (no extra transforms).
 - Only rows with `F0 = 1` represent valid scan data.
-- `.sky` and `.path` timestamps are ISO-8601 UTC strings.
-- Site coordinates are fixed as above.
-
-
-Implementation notes
---------------------
-- Column access is **by header name** (robust to column order).
-- **No internal core-sample selection**: central power = mean over the scan,
-  centroid time = argmax timestamp.
-- Observed az/el come from the **nearest** `.path` sample (no interpolation).
-- Azimuth bias: **+0.75°**; azimuth wrapping to **[0, 360)**.
-- Ephemerides computed with **Astropy** at the centroid time and site.
-
+- `.sky` and `.path` timestamps are both UTC in ISO-8601 format.
+- Site coordinates used for ephemerides: longitude = **164.1000°**,
+  latitude = **−74.6933°**, height not used by PySolar here.
 
 Note on the choice of Astropy over PySolar
 ------------------------------------------
@@ -181,6 +161,14 @@ refraction (or its full exclusion if desired). When configured with realistic
 meteorological parameters, Astropy reproduces the apparent solar position to
 better than a few arcseconds and ensures internal consistency with professional
 astronomical frameworks.
+
+
+Roadmap (if you want to extend this file)
+-----------------------------------------
+- Make absolute and relative thresholds configurable.
+- Add optional pre-cleaning of `.sky` glitches (simple MAD) without altering the
+  A–D behavior by default.
+- Add a switch to choose “median” instead of “mean” for the central power.
 """
 
 import os
@@ -317,7 +305,6 @@ def choose_scan_and_centroid_time(
     f0: np.ndarray,
     sky_times: np.ndarray,
     sky_vals: np.ndarray,
-    samples_s,
 ) -> Optional[Tuple[Tuple[int, int], float, float]]:
     """
     Return (segment, t_centroid, central_power) where:
@@ -337,10 +324,6 @@ def choose_scan_and_centroid_time(
     sky_mask_abs = sky_vals > ABS_SIGNAL_MIN
     sky_times_abs = sky_times[sky_mask_abs]
     sky_vals_abs = sky_vals[sky_mask_abs]
-    sort_idx = np.argsort(sky_times_abs)
-    sky_times_abs = sky_times_abs[sort_idx]
-    sky_vals_abs = sky_vals_abs[sort_idx]
-
 
     if sky_times_abs.size == 0:
         return None
@@ -365,39 +348,11 @@ def choose_scan_and_centroid_time(
         if sv.size == 0:
             continue
 
-        # --- Adaptive smoothing to suppress narrow glitches ---
-        N = len(sv)
-        window_len = max(50, min(int(0.05 * N), samples_s))
-        kernel = np.ones(window_len) / window_len
-        sv_smooth = np.convolve(sv, kernel, mode="same")
-
-        # Ensure st and sv have identical length (defensive)
-        n = min(len(st), len(sv))
-        st = st[:n]
-        sv = sv[:n]
-        sv_smooth = sv_smooth[:n]
-
-        # --- Peak index on smoothed series ---
-        k_max = int(np.argmax(sv_smooth))
-
-        # --- 3-point parabolic refinement (sub-sample) ---
-        delta = 0.0
-        if 0 < k_max < len(sv_smooth) - 1:
-            y0, y1, y2 = sv_smooth[k_max - 1 : k_max + 2]
-            denom = (y0 - 2.0 * y1 + y2)
-            if denom != 0.0:
-                delta = 0.5 * (y0 - y2) / denom  # shift in samples, ~[-0.5, 0.5]
-
-        # --- Convert refined sample index to time ---
-        mean_dt = float(np.median(np.diff(st))) if len(st) > 1 else 0.0
-        t_centroid = float(st[k_max] + delta * mean_dt)
-
-        # --- Peak detection on smoothed signal ---
-        scan_max = np.max(sv_smooth)
+        scan_max = np.max(sv)
         if scan_max <= 0:
             continue
 
-        keep = sv_smooth >= (REL_PEAK_FRAC * scan_max)
+        keep = sv >= (REL_PEAK_FRAC * scan_max)
         if not np.any(keep):
             continue
 
@@ -408,27 +363,25 @@ def choose_scan_and_centroid_time(
         t_centroid = float(np.mean(st_sel))
         # central power = mean of powers above relative threshold
         central_power = float(np.mean(sv_sel))
-        # total mass above threshold (robust metric for solar crossing)
-        mass_above_thr = float(np.sum(sv_sel))
 
-        chosen_list.append((seg_idx, (a, b), t_centroid, central_power, mass_above_thr))
+        chosen_list.append((seg_idx, (a, b), t_centroid, central_power))
 
     if not chosen_list:
         return None
 
-    # Filter scans with central_power ≥ REL_CENTRAL_POWER_FRAC × MaxCentralPower
-    central_powers = np.array([cp for *_, cp, _ in chosen_list], dtype=float)
+    # Keep scans with central_power ≥ REL_CENTRAL_POWER_FRAC × MaxCentralPower
+    central_powers = np.array([cp for _, _, _, cp in chosen_list], dtype=float)
     max_cp = float(np.max(central_powers))
     thr_cp = REL_CENTRAL_POWER_FRAC * max_cp
 
-    kept = [(i, seg, tc, cp, m)
-            for (i, seg, tc, cp, m) in chosen_list
-            if cp >= thr_cp]
+    kept = [(i, seg, tc, cp) for (i, seg, tc, cp) in chosen_list if cp >= thr_cp]
     if not kept:
         return None
 
-    best = max(kept, key=lambda x: x[-1])  # compare by mass_above_thr
-    _, seg_chosen, t_centroid_chosen, central_power_chosen, _ = best
+    # Pick the **middle** by index among the kept scans (median scan index)
+    kept_sorted = sorted(kept, key=lambda x: x[0])
+    mid_idx = len(kept_sorted) // 2
+    _, seg_chosen, t_centroid_chosen, central_power_chosen = kept_sorted[mid_idx]
 
     return seg_chosen, t_centroid_chosen, central_power_chosen
 
@@ -481,22 +434,6 @@ def compute_ephem(dt_utc: datetime, lat_deg: float, lon_deg: float) -> Tuple[flo
     return az, el
 
 
-def estimate_samples_in_s(sky_rows) -> int:
-    """Estimate number of samples corresponding to seconds of observation."""
-
-    if len(sky_rows) < 2:
-        return 0
-    t_s = np.sort([r.t_utc.timestamp() for r in sky_rows])
-    dt = np.diff(t_s)
-    mean_dt = np.median(dt)  # typical spacing in seconds
-    if mean_dt <= 0:
-        return 0
-
-    SCAN_DURATION = 15 # seconds
-    SAMPLES_S = SCAN_DURATION / 20
-    return int(round(SAMPLES_S / mean_dt))
-
-
 def process_map(map_id: str, path_fname: str, sky_fname: str) -> Optional[Tuple[str, str, float, float, float, float]]:
     """
     Compatibility pipeline for one map_id:
@@ -510,7 +447,6 @@ def process_map(map_id: str, path_fname: str, sky_fname: str) -> Optional[Tuple[
     """
     path_rows = read_path_file(path_fname)
     sky_rows = read_sky_file(sky_fname)
-    samples_s = estimate_samples_in_s(sky_rows)
     if not path_rows or not sky_rows:
         return None
 
@@ -522,7 +458,7 @@ def process_map(map_id: str, path_fname: str, sky_fname: str) -> Optional[Tuple[
     sky_times = np.array([to_unix_s(r.t_utc) for r in sky_rows], dtype=float)
     sky_vals = np.array([r.signal for r in sky_rows], dtype=float)
 
-    choice = choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, samples_s)
+    choice = choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals)
     if choice is None:
         return None
     (a, b), t_centroid_s, _central_power = choice
@@ -543,8 +479,8 @@ def process_map(map_id: str, path_fname: str, sky_fname: str) -> Optional[Tuple[
 
 def find_map_pairs() -> List[Tuple[str, str, str]]:
     """Return (map_id, path_fname, sky_fname) pairs in the data directory."""
-    path_files = glob.glob("data/*.path")
-    sky_set = set(glob.glob("data/*.sky"))
+    path_files = glob.glob("data2/*.path")
+    sky_set = set(glob.glob("data2/*.sky"))
     pairs = []
     for p in path_files:
         base = os.path.splitext(p)[0]
@@ -581,7 +517,7 @@ def append_result_tsv(out_fname: str, row: Tuple[str, str, float, float, float, 
 
 
 def main():
-    out_fname = "buttu.tsv"
+    out_fname = "buttu_1.tsv"
     pairs = find_map_pairs()
     if not pairs:
         print("No <map_id>.path / <map_id>.sky pairs found in current directory.")

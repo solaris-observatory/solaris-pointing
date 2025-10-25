@@ -102,6 +102,8 @@ robust/local thresholding:
 No MAD/percentile/thresholds are used; the method relies solely on per-scan mean
 power for ranking and the argmax for timing.
 
+The centroid time is obtained from the maximum of the smoothed signal with a 3-point parabolic refinement, yielding a sub-sample timing estimate independent of threshold selection.
+
 
 Observed coordinates (no interpolation)
 ---------------------------------------
@@ -369,16 +371,31 @@ def choose_scan_and_centroid_time(
         kernel = np.ones(window_len) / window_len
         sv_smooth = np.convolve(sv, kernel, mode="same")
 
-        # --- Peak detection on smoothed signal ---
-        scan_max = np.max(sv_smooth)
-        if scan_max <= 0:
-            continue
-
         # Ensure st and sv have identical length (defensive)
         n = min(len(st), len(sv))
         st = st[:n]
         sv = sv[:n]
         sv_smooth = sv_smooth[:n]
+
+        # --- Peak index on smoothed series ---
+        k_max = int(np.argmax(sv_smooth))
+
+        # --- 3-point parabolic refinement (sub-sample) ---
+        delta = 0.0
+        if 0 < k_max < len(sv_smooth) - 1:
+            y0, y1, y2 = sv_smooth[k_max - 1 : k_max + 2]
+            denom = (y0 - 2.0 * y1 + y2)
+            if denom != 0.0:
+                delta = 0.5 * (y0 - y2) / denom  # shift in samples, ~[-0.5, 0.5]
+
+        # --- Convert refined sample index to time ---
+        mean_dt = float(np.median(np.diff(st))) if len(st) > 1 else 0.0
+        t_centroid = float(st[k_max] + delta * mean_dt)
+
+        # --- Peak detection on smoothed signal ---
+        scan_max = np.max(sv_smooth)
+        if scan_max <= 0:
+            continue
 
         keep = sv_smooth >= (REL_PEAK_FRAC * scan_max)
         if not np.any(keep):
@@ -476,7 +493,7 @@ def estimate_samples_in_s(sky_rows) -> int:
         return 0
 
     SCAN_DURATION = 15 # seconds
-    SAMPLES_S = SCAN_DURATION / 6
+    SAMPLES_S = SCAN_DURATION / 20
     return int(round(SAMPLES_S / mean_dt))
 
 
@@ -526,8 +543,8 @@ def process_map(map_id: str, path_fname: str, sky_fname: str) -> Optional[Tuple[
 
 def find_map_pairs() -> List[Tuple[str, str, str]]:
     """Return (map_id, path_fname, sky_fname) pairs in the data directory."""
-    path_files = glob.glob("data/*.path")
-    sky_set = set(glob.glob("data/*.sky"))
+    path_files = glob.glob("data0/*.path")
+    sky_set = set(glob.glob("data0/*.sky"))
     pairs = []
     for p in path_files:
         base = os.path.splitext(p)[0]
@@ -564,7 +581,7 @@ def append_result_tsv(out_fname: str, row: Tuple[str, str, float, float, float, 
 
 
 def main():
-    out_fname = "buttu.tsv"
+    out_fname = "buttu_3.tsv"
     pairs = find_map_pairs()
     if not pairs:
         print("No <map_id>.path / <map_id>.sky pairs found in current directory.")
