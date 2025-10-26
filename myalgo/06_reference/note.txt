@@ -1,0 +1,42 @@
+Questo è l'algoritmo di riferimento, da migliorare, se possibile.
+Non ci perderei molto tempo perché ho provato ogni sorta di
+possibile miglioramento, ma questo è il più semplice e il più
+efficace, comprese strategie in linea di principio migliori.
+
+Differenze rispetto all'algoritmo precedente, quello originale:
+
+Before:
+  scan_max = np.max(sv)
+Now, robust estimate of the scan peak (ignore transient spikes):
+  scan_max = np.percentile(sv, 99.9)
+Result: no result (because of no spikes)
+
+
+Before:
+  left = idx - 1
+  k = left if (t_centroid_s - t_path[left]) <= (t_path[idx] - t_path[left]) else idx
+Now:
+  left = idx - 1
+  dist_left = abs(t_centroid_s - t_path[left])
+  dist_right = abs(t_path[idx] - t_centroid_s)
+  k = left if dist_left <= dist_right else idx
+Why:
+  La funzione nearest_path_observed sceglie il campione .path più vicino al tempo
+  del centroide. C'è però un errore nella distanza usata per decidere tra idx-1 e idx:
+  confronta con la larghezza dell'intervallo, non con la distanza al centroide.
+Risultato: piccolo miglioramento
+
+
+Before:
+  delta_az = az_obs - az_eph
+Now:
+  delta_az = az_obs - az_eph
+  delta_az = (delta_az + 180.0) % 360.0 - 180.0
+Risultato: nessuno
+
+Before:
+  i0 = np.searchsorted(sky_times_abs, t0, side="left")
+  i1 = np.searchsorted(sky_times_abs, t1, side="right")
+After:
+  i0 = np.searchsorted(sky_times_abs, t0, side="left")   # include t0
+  i1 = np.searchsorted(sky_times_abs, t1, side="left")   # exclude t1
