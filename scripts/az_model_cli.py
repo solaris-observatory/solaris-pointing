@@ -332,8 +332,9 @@ def cmd_fit(args: argparse.Namespace) -> int:
     # Accept multiple TSV inputs
     raw_paths = args.tsv if isinstance(args.tsv, (list, tuple)) else [args.tsv]
     tsv_paths = [_resolve_input_tsv(p) for p in raw_paths]
-    # (stem, bundle, path, az_lin, off_az, off_el, period_tuple)
-    bundles: list[tuple[str, any, str, np.ndarray, np.ndarray, np.ndarray, tuple[str|None, str|None]]] = []
+    # (stem, bundle, path, az_lin, off_az, off_el, period_info)
+    # period_info = (start_str, end_str, has_gaps, days_list_str)
+    bundles: list[tuple[str, any, str, np.ndarray, np.ndarray, np.ndarray, tuple[str|None, str|None,bool,str]]] = []
 
     # Ensure output base directory exists (models/) for defaults
     os.makedirs(_default_models_dir(), exist_ok=True)
@@ -388,9 +389,6 @@ def cmd_fit(args: argparse.Namespace) -> int:
             summ_path = os.path.join(_default_models_dir(), f"{stem}_summary.txt")
 
         _ensure_dir(summ_path)
-        with open(summ_path, "w", encoding="utf-8") as f:
-            f.write(model_summary(bundle))
-        print(f"Wrote summary: {summ_path}")
 
         # Read back data for plotting & period detection
         dfp = read_offsets_tsv(work_path)
@@ -399,8 +397,9 @@ def cmd_fit(args: argparse.Namespace) -> int:
         off_el = dfp["offset_el"].to_numpy(float)
         az_lin, cut, lo, hi = unwrap_azimuth(az)
 
-        # --- Compute (YY/MM/DD -- YY/MM/DD) period tuple for this file ---
-        period_tuple: tuple[str | None, str | None] = (None, None)
+        # --- Compute period info and detect day gaps --------------------------
+        # period_info: (start_str, end_str, has_gaps, days_list_str)
+        period_info: tuple[str | None, str | None, bool, str] = (None, None, False, "")
         try:
             cols = [c.strip() for c in dfp.columns]
             if "timestamp" in cols:
@@ -417,12 +416,40 @@ def cmd_fit(args: argparse.Namespace) -> int:
                                         utc=True, errors="coerce")
                 ts = ts.dropna()
                 if len(ts) > 0:
-                    oldest = ts.min().to_pydatetime()
-                    newest = ts.max().to_pydatetime()
-                    period_tuple = (f"{oldest:%y/%m/%d}", f"{newest:%y/%m/%d}")
+                    # Get unique days (UTC), sorted
+                    days = pd.to_datetime(ts.dt.normalize()).unique()
+                    days = np.sort(days)
+                    # Expected contiguous-day count
+                    start_day = pd.to_datetime(days[0])
+                    end_day = pd.to_datetime(days[-1])
+                    expected_count = (end_day - start_day).days + 1
+                    has_gaps = (len(days) != expected_count)
+
+                    # Formatters
+                    start_str = start_day.to_pydatetime().strftime("%y/%m/%d")
+                    end_str = end_day.to_pydatetime().strftime("%y/%m/%d")
+                    days_list_str = ", ".join(
+                        pd.to_datetime(days).strftime("%y/%m/%d").tolist()
+                    )
+
+                    period_info = (start_str, end_str, has_gaps, days_list_str)
         except Exception:
-            period_tuple = (None, None)
+            period_info = (None, None, False, "")
         # ---------------------------------------------------------------------
+
+        # Write summary (append period information at the end)
+        with open(summ_path, "w", encoding="utf-8") as f:
+            f.write(model_summary(bundle))
+            f.write("\n")
+            ps, pe, has_gaps, days_list = period_info
+            if ps and pe:
+                if has_gaps:
+                    # If there are gaps, list the actual days present
+                    f.write("Data days: " + days_list + "\n")
+                else:
+                    # If contiguous, show only the period
+                    f.write(f"Data period: {ps} -- {pe}\n")
+        print(f"Wrote summary: {summ_path}")
 
         # Recompute robust masks using thresholds from metadata
         yhat_az = bundle.az_model(az_lin)
@@ -461,8 +488,11 @@ def cmd_fit(args: argparse.Namespace) -> int:
         )
 
         # ---- Titles for single-file plots ----
-        if period_tuple[0] and period_tuple[1]:
-            top_line = f"{stem}: ({period_tuple[0]} -- {period_tuple[1]})"
+        ps, pe, has_gaps, _days_str = period_info
+        if ps and pe:
+            # append " **" if there are day gaps
+            gap_mark = " **" if has_gaps else ""
+            top_line = f"{stem}: ({ps} -- {pe}){gap_mark}"
         else:
             top_line = stem
 
@@ -478,8 +508,8 @@ def cmd_fit(args: argparse.Namespace) -> int:
         plt.close(fig2)
         print(f"Saved plots: {f1} , {f2}")
 
-        # Track for combined (include period_tuple)
-        bundles.append((stem, bundle, path, az_lin, off_az, off_el, period_tuple))
+        # Track for combined (include period_info)
+        bundles.append((stem, bundle, path, az_lin, off_az, off_el, period_info))
 
         # Clean temp, if any
         if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
@@ -500,7 +530,9 @@ def cmd_fit(args: argparse.Namespace) -> int:
         f2 = f"{root}_el{ext}"
 
         # Determine if all periods are identical and non-None
-        periods = [t[6] for t in bundles_sorted]
+        periods = [t[6][:2] for t in bundles_sorted]  # (start, end)
+        gaps_flags = [t[6][2] for t in bundles_sorted]  # has_gaps flags
+
         def _period_equal(p1, p2):
             return (p1[0] is not None and p1[1] is not None and
                     p2[0] is not None and p2[1] is not None and
@@ -513,33 +545,37 @@ def cmd_fit(args: argparse.Namespace) -> int:
             if all_equal:
                 common_period = periods[0]
 
-        # Title (top): only file names; if periods differ, show period per name.
+        # Title (top): only file names; if periods differ, show period per name (with ** if gaps).
         if all_equal:
             top_title = "  +  ".join(stems_sorted)
         else:
             decorated = []
-            for (stem, _, _, _, _, _, per) in bundles_sorted:
-                if per[0] and per[1]:
-                    decorated.append(f"{stem}: ({per[0]} -- {per[1]})")
+            for (stem, _, _, _, _, _, info) in bundles_sorted:
+                ps, pe, has_gaps, _days_str = info
+                if ps and pe:
+                    gap_mark = " **" if has_gaps else ""
+                    decorated.append(f"{stem}: ({ps} -- {pe}){gap_mark}")
                 else:
                     decorated.append(stem)
             top_title = "  +  ".join(decorated)
 
         # Sub-title (centered line below): always parameters ONCE.
-        # If periods are identical, append the common period here.
+        # If periods are identical, append the common period here (with ** if any file has gaps).
         meta0 = bundles_sorted[0][1].meta
         params_line = (
             f"degree={meta0.degree}, α={meta0.ridge_alpha:g}, "
             f"zA={meta0.zscore_az:g}, zE={meta0.zscore_el:g}, f={meta0.fourier_k:g}"
         )
         if all_equal and common_period[0] and common_period[1]:
-            params_line = f"{params_line}     ({common_period[0]} -- {common_period[1]})"
+            any_gap = any(gaps_flags)
+            gap_mark = " **" if any_gap else ""
+            params_line = f"{params_line}     ({common_period[0]} -- {common_period[1]}){gap_mark}"
 
         # ---- AZ combined ----
         fig1, ax1 = plt.subplots(figsize=(7, 4))
         fac = _axis_factor_for_unit(args.plot_unit)
 
-        for (stem, bundle, path, az_lin, off_az, off_el, _per) in bundles_sorted:
+        for (stem, bundle, path, az_lin, off_az, off_el, _info) in bundles_sorted:
             res_tot = (off_az - bundle.az_model(az_lin)) * fac
             lbl = f"{stem} (MAD={_mad(res_tot):.2g})"
             xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
@@ -558,7 +594,7 @@ def cmd_fit(args: argparse.Namespace) -> int:
 
         # ---- EL combined ----
         fig2, ax2 = plt.subplots(figsize=(7, 4))
-        for (stem, bundle, path, az_lin, off_az, off_el, _per) in bundles_sorted:
+        for (stem, bundle, path, az_lin, off_az, off_el, _info) in bundles_sorted:
             res_tot_el = (off_el - bundle.el_model(az_lin)) * fac
             lbl = f"{stem} (MAD={_mad(res_tot_el):.2g})"
             xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
