@@ -1,0 +1,18 @@
+Azimuth-only pointing model (linearized azimuth)
+  degree:              3
+  zscore_az / zscore_el:  2.5 / 2.5
+  ridge_alpha:         0.01
+  cut (deg):           181.107750
+  az_lin range (deg):  [282.087400, 440.128100]
+  fitted at (UTC):     2025-10-27T09:27:06Z
+  data hash:           5c1175486b4dfc14...
+  source TSV:          offsets/new_tuning.tsv
+Diagnostics (inliers/refit):
+  n_input / kept_az / kept_el: 35 / 30 / 34
+  R2 (az / el):        0.83963 / 0.85823
+  RMSE (deg) az/el:    3.254619e-03 / 5.517584e-03
+  MAE  (deg) az/el:    2.652711e-03 / 4.305293e-03
+Polynomials (power basis):
+  offset_az(az_lin) = +2.615781e-03 x^0 +7.206522e-04 x^1 -5.972459e-06 x^2 +8.932542e-09 x^3
+  offset_el(az_lin) = +1.339542e-02 x^0 +1.903135e-04 x^1 -6.212089e-07 x^2 +1.414137e-09 x^3
+Data period: 25/01/03 -- 25/01/05
