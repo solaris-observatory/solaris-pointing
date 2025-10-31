@@ -8,9 +8,9 @@ htmlcov
 output_example*
 orange*
 logs/
-offsets/orange*
-offsets/marongiu*
+offsets/*.tsv
 models/orange*
 models/marongiu*
 models/buttu*
 TODO.txt
+myalgo*
