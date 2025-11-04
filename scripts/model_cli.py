@@ -69,6 +69,7 @@ import importlib
 import json
 import shutil
 from pathlib import Path
+from math import isnan
 
 import numpy as np
 import pandas as pd
@@ -715,6 +716,79 @@ def cmd_fit(args: argparse.Namespace) -> int:
 
         if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
             os.remove(work_path)
+
+    # ------------------------------------------------------------------
+    # Combined curves-only plot (multi-file, per-axis aware)
+    # ------------------------------------------------------------------
+    if len(tsv_paths) > 1:
+        # Use bundles_info accumulated during fitting
+        bundles_sorted = sorted(bundles_info, key=lambda t: t[0])  # sort by stem
+        stems_sorted = [t[0] for t in bundles_sorted]
+        name_base = "+".join(stems_sorted)
+
+        base_path = os.path.join(_default_models_dir(), name_base + ".png")
+        root, ext = os.path.splitext(base_path)
+        f1 = f"{root}_az{ext}"
+        f2 = f"{root}_el{ext}"
+
+        fac = _axis_factor_for_unit(args.plot_unit)
+        params_line = (
+            f"degree={args.degree}, α={args.ridge_alpha:g}, "
+            f"z={args.zscore:g}, f={args.fourier_k:g}"
+        )
+        top_title = "  +  ".join(stems_sorted)
+
+        # ---- AZ combined ----
+        if not args.el:  # plot AZ if --el not exclusive
+            fig1, ax1 = plt.subplots(figsize=(7, 4))
+            for (stem, bundle, path, az_lin, off_az, off_el, _period_info) in bundles_sorted:
+                if bundle.az_model is None:
+                    continue
+                yhat = bundle.az_model(az_lin)
+                res = (off_az - yhat) * fac
+                lbl = f"{stem} (MAD={_mad(res):.2g})"
+                xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
+                ax1.plot(xs, bundle.az_model(xs) * fac, linewidth=2.0, label=lbl)
+
+            if len(ax1.lines) > 0:
+                ax1.set_xlabel("az_lin (deg)")
+                ax1.set_ylabel(f"offset_az ({args.plot_unit})")
+                ax1.grid(True, alpha=0.25)
+                ax1.legend()
+                fig1.subplots_adjust(top=0.86, bottom=0.13)
+                fig1.suptitle(top_title, fontsize=8, y=0.97)
+                fig1.text(0.5, 0.930, params_line, ha="center", va="top", fontsize=8)
+                fig1.savefig(f1, dpi=300, bbox_inches="tight")
+                plt.close(fig1)
+                print(f"Saved combined plot: {f1}")
+            else:
+                plt.close(fig1)
+
+        # ---- EL combined ----
+        if not args.az:  # plot EL if --az not exclusive
+            fig2, ax2 = plt.subplots(figsize=(7, 4))
+            for (stem, bundle, path, az_lin, off_az, off_el, _period_info) in bundles_sorted:
+                if bundle.el_model is None:
+                    continue
+                yhat = bundle.el_model(az_lin)
+                res = (off_el - yhat) * fac
+                lbl = f"{stem} (MAD={_mad(res):.2g})"
+                xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
+                ax2.plot(xs, bundle.el_model(xs) * fac, linewidth=2.0, label=lbl)
+
+            if len(ax2.lines) > 0:
+                ax2.set_xlabel("az_lin (deg)")
+                ax2.set_ylabel(f"offset_el ({args.plot_unit})")
+                ax2.grid(True, alpha=0.25)
+                ax2.legend()
+                fig2.subplots_adjust(top=0.86, bottom=0.13)
+                fig2.suptitle(top_title, fontsize=8, y=0.97)
+                fig2.text(0.5, 0.930, params_line, ha="center", va="top", fontsize=8)
+                fig2.savefig(f2, dpi=300, bbox_inches="tight")
+                plt.close(fig2)
+                print(f"Saved combined plot: {f2}")
+            else:
+                plt.close(fig2)
 
     return 0
 
