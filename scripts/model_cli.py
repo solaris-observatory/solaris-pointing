@@ -9,7 +9,6 @@ Available subcommands
 -------------------------------------------------------------------------------
 fit       Fit az/el models from one or more TSV input files.
 predict   Predict az/el offsets for a given azimuth using saved model(s).
-summary   Print model diagnostics and metadata.
 
 -------------------------------------------------------------------------------
 Command-line usage examples
@@ -31,14 +30,14 @@ Command-line usage examples
    python scripts/model_cli.py fit alpacino.tsv --el \
        --degree 3 --zscore 2.5 --fourier-k 1 --periods-deg 90,45
 
-5) Predict (both axes if no selector):
-   python scripts/model_cli.py predict models/alpacino \
-       --az 12.0 --unit arcsec
+5) Predict both axes (--az and --el) if no selector):
+   python scripts/model_cli.py predict alpacino \
+       --azimuth 12.0 --unit arcsec
    # This will try models/alpacino_az.joblib and models/alpacino_el.joblib.
 
-   Only az:
-   python scripts/model_cli.py predict models/alpacino_az.joblib --az \
-       --az 12.0 --unit arcsec
+   Only --az:
+   python scripts/model_cli.py predict alpacino --az \
+       --azimuth 12.0 --unit arcsec
 
 -------------------------------------------------------------------------------
 Input and output conventions
@@ -172,15 +171,18 @@ def _save_bundle_with_meta(bundle, path: str, backend_kind: str) -> None:
 
 def _load_bundle_with_meta(path: str):
     """
-    Load the bundle using the backend's native loader. Then read the sidecar
-    JSON (<path>.meta.json) to get the backend kind. If the sidecar is missing
-    (legacy bundles), default to '1d'.
-    Returns: (backend_kind, payload)
-    """
-    # 1) load the real bundle (payload) first
-    payload = load_model_bundle(path)
+    Load a saved model bundle together with its backend kind.
 
-    # 2) read sidecar metadata if available
+    Order of operations (fixed):
+    1) Read the sidecar JSON (<path>.meta.json) to discover the backend kind.
+       If missing (legacy bundles), default to "1d".
+    2) Bind the backend (so that load_model_bundle is available).
+    3) Load the actual bundle payload with the backend's native loader.
+    4) Return (backend_kind, payload).
+
+    This avoids calling load_model_bundle before binding the backend.
+    """
+    # 1) Discover backend kind from sidecar (if present)
     meta_path = path + ".meta.json"
     kind = "1d"
     try:
@@ -192,6 +194,13 @@ def _load_bundle_with_meta(path: str):
     except Exception as e:
         print(f"[WARN] Could not read metadata sidecar {meta_path}: {e}")
 
+    # 2) Bind the backend before attempting to load the bundle
+    _bind_backend(kind)
+
+    # 3) Load the bundle payload using the backend's loader
+    payload = load_model_bundle(path)
+
+    # 4) Return (kind, payload)
     return kind, payload
 
 
@@ -264,14 +273,8 @@ def _axis_factor_for_unit(unit: str) -> float:
         raise ValueError(f"Unknown unit: {unit!r}")
 
 
-def _mad_local(x: np.ndarray) -> float:
-    med = np.median(x)
-    m = np.median(np.abs(x - med))
-    return 1.4826 * m if m > 0 else 0.0
-
-
 def _mk_mask(res, thr):
-    s = _mad_local(res)
+    s = _mad(res)
     if s == 0.0:
         return np.ones_like(res, dtype=bool)
     return np.abs(res) <= thr * s
@@ -284,7 +287,7 @@ def cmd_fit(args: argparse.Namespace) -> int:
     """
     Fit AZ/EL models using a uniform-API backend. The backend is selected
     only for training via --model <kind> and stored in the saved bundles'
-    metadata for later auto-selection by predict/summary.
+    metadata for later auto-selection by predict
     """
     # Determine which axis(es) to fit
     axes: list[str]
@@ -424,7 +427,7 @@ def cmd_fit(args: argparse.Namespace) -> int:
             assert axis in ("az", "el")
 
             out_model = models_dir / f"{stem}_{axis}.joblib"
-            out_summary = models_dir / f"{stem}_{axis}_summary.txt"
+            out_summary = models_dir / f"{stem}_summary_{axis}.txt"
             out_plot = plots_dir / f"{stem}_{axis}.png"
 
             # Guard for model presence
@@ -438,20 +441,138 @@ def cmd_fit(args: argparse.Namespace) -> int:
             _save_bundle_with_meta(bundle, str(out_model), backend_kind=kind)
             print(f"Saved model: {out_model}")
 
-            # Per-axis summary + MAD
+            # Per-axis summary + MAD_t / MAD_i + Python function
             with open(out_summary, "w", encoding="utf-8") as f:
                 txt = model_summary_axis(bundle, axis)
+
+                # Residuals in requested plot-unit
                 if axis == "az":
-                    res = (off_az - bundle.az_model(az_lin)) * _axis_factor_for_unit(
-                        args.plot_unit
-                    )
+                    res_all = (
+                        off_az - bundle.az_model(az_lin)
+                    ) * _axis_factor_for_unit(args.plot_unit)
+                    keep = m_az
                 else:
-                    res = (off_el - bundle.el_model(az_lin)) * _axis_factor_for_unit(
-                        args.plot_unit
+                    res_all = (
+                        off_el - bundle.el_model(az_lin)
+                    ) * _axis_factor_for_unit(args.plot_unit)
+                    keep = m_el
+
+                # Compute MAD_t (all points) and MAD_i (inliers only)
+                mad_t = _mad(res_all)
+                mad_i = _mad(res_all[keep])
+
+                # Append to summary
+                txt += f"\nMAD_t ({args.plot_unit}): {mad_t:.3f}\n"
+                txt += f"MAD_i ({args.plot_unit}): {mad_i:.3f}\n"
+
+                # --- Append Python function representation ----------
+                func_txt = ""
+                try:
+                    model = bundle.az_model if axis == "az" else bundle.el_model
+                    meta = bundle.meta  # includes cut_deg, etc.
+
+                    lines = []
+                    lines.append(
+                        f"\n# Python function for {axis.upper()} "
+                        f"offset (degrees in --> degrees out)"
                     )
-                mad_val = _mad(res)
-                txt += f"\nMAD ({args.plot_unit}): {mad_val:.3f}\n"
-                f.write(txt)
+                    lines.append(f"def {axis}_offset(az):")
+                    lines.append(
+                        '    """Return %s offset in degrees. '
+                        'Input az in degrees [0..360) or any real."""' % axis.upper()
+                    )
+                    lines.append("    from math import sin, cos, radians")
+                    lines.append("")
+                    lines.append(
+                        "    # Linearize azimuth using the stored cut from the fit"
+                    )
+                    lines.append(f"    CUT = {getattr(meta, 'cut_deg', 0.0):.6f}")
+                    lines.append("    a = az % 360.0")
+                    lines.append(
+                        "    x = a + 360.0 if a < CUT else a  # x = az_lin (deg)"
+                    )
+                    lines.append("")
+                    lines.append("    # Polynomial (in x = az_lin)")
+                    lines.append("    y = (")
+
+                    # ---- polynomial part ----
+                    coef = np.asarray(getattr(model, "coef", []), dtype=float)
+                    d = int(getattr(model, "poly_degree", len(coef) - 1))
+                    base = 0
+                    poly_lines = []
+                    for i in range(d + 1):
+                        c = float(coef[base + i]) if base + i < coef.size else 0.0
+                        if abs(c) <= 1e-15:
+                            continue
+                        if i == 0:
+                            poly_lines.append(f"        {c:+.9e}")
+                        elif i == 1:
+                            poly_lines.append(f"        {c:+.9e} * x")
+                        else:
+                            poly_lines.append(f"        {c:+.9e} * x**{i}")
+                    if not poly_lines:
+                        poly_lines.append("        0.0")
+                    lines.extend(poly_lines)
+                    lines.append("    )")
+                    lines.append("")
+
+                    # ---- Fourier terms ----
+                    kmax = int(getattr(model, "fourier_k", 0))
+                    base = d + 1
+                    if kmax > 0:
+                        lines.append("    # Fourier k/rev terms (in x = az_lin)")
+                        for k in range(1, kmax + 1):
+                            Ak = (
+                                float(coef[base + 2 * (k - 1) + 0])
+                                if base + 2 * (k - 1) + 0 < coef.size
+                                else 0.0
+                            )
+                            Bk = (
+                                float(coef[base + 2 * (k - 1) + 1])
+                                if base + 2 * (k - 1) + 1 < coef.size
+                                else 0.0
+                            )
+                            if abs(Ak) > 1e-15:
+                                lines.append(
+                                    f"    y += {Ak:+.9e} * cos(radians({k} * x))"
+                                )
+                            if abs(Bk) > 1e-15:
+                                lines.append(
+                                    f"    y += {Bk:+.9e} * sin(radians({k} * x))"
+                                )
+                        lines.append("")
+
+                    # ---- custom periods ----
+                    periods = list(getattr(model, "periods_deg", []) or [])
+                    idx = d + 1 + 2 * kmax
+                    if periods:
+                        lines.append("    # Custom-period terms")
+                        for P in periods:
+                            C = float(coef[idx]) if idx < coef.size else 0.0
+                            idx += 1
+                            S = float(coef[idx]) if idx < coef.size else 0.0
+                            idx += 1
+                            if abs(C) > 1e-15:
+                                lines.append(
+                                    f"    y += {C:+.9e} * cos((3.141592653589793*2) "
+                                    f"* x / {float(P):.6f})"
+                                )
+                            if abs(S) > 1e-15:
+                                lines.append(
+                                    f"    y += {S:+.9e} * sin((3.141592653589793*2) "
+                                    f"* x / {float(P):.6f})"
+                                )
+                        lines.append("")
+
+                    lines.append("    return y")
+                    func_txt = "\n" + "\n".join(lines) + "\n"
+
+                except Exception as e:
+                    func_txt = f"\n# [WARN] Could not generate Python function: {e}\n"
+
+                # Write summary text + nicely formatted Python function
+                f.write(txt + func_txt)
+                # ----------------------------------------------------------------
 
             # --- Per-axis param line for the single-plot title
             meta = bundle.meta
@@ -562,12 +683,56 @@ def _plot_fit(
         ax.scatter(az_lin[m_in], y[m_in] * fac, s=24, alpha=0.85, label="inliers")
 
     xs = np.linspace(float(az_lin.min()), float(az_lin.max()), 600)
-    ax.plot(xs, model(xs) * fac, linewidth=2.0, label=f"fit (MAD={_mad(res):.2g})")
+    ax.plot(
+        xs,
+        model(xs) * fac,
+        linewidth=2.0,
+        label=f"fit (MAD={_mad(res):.2g})",  # MAD_t (total -> all points)
+    )
 
     ax.set_xlabel("az_lin (deg)")
     ax.set_ylabel(f"{label_y} ({unit})")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
+
+
+def _resolve_model_path_for_predict(user_path: str, axis: str | None) -> str:
+    """
+    Resolve the model path for predict, honoring the default 'models/' directory
+    when the user does not provide an explicit directory.
+
+    Rules:
+    - If 'user_path' contains a directory separator, use it as-is (only ensure
+      the proper axis suffix and .joblib when needed).
+    - If 'user_path' has no directory, prepend 'models/'.
+    - If 'axis' is provided ('az' or 'el'):
+        * If the basename already ends with '_az'/'_el', keep it and only ensure .joblib.
+        * Otherwise, append f'_{axis}' and ensure .joblib.
+    - If 'axis' is None, just ensure .joblib if missing (used rarely here).
+    """
+    base = user_path
+    has_dir = (os.sep in base) or (os.altsep and os.altsep in base)
+
+    # Prepend default directory when none is provided
+    if not has_dir:
+        base = os.path.join("models", base)
+
+    b, e = os.path.splitext(base)
+    name = os.path.basename(b)
+
+    def ensure_joblib(p: str) -> str:
+        bb, ee = os.path.splitext(p)
+        return p if ee else (bb + ".joblib")
+
+    if axis in ("az", "el"):
+        if name.endswith("_az") or name.endswith("_el"):
+            # User already provided an axis-suffixed basename; just ensure .joblib
+            return ensure_joblib(base + e)
+        # Append the requested axis and ensure .joblib
+        return ensure_joblib(f"{b}_{axis}{e if e else ''}")
+
+    # No axis provided: just ensure .joblib
+    return ensure_joblib(base + e)
 
 
 def cmd_predict(args: argparse.Namespace) -> int:
@@ -595,26 +760,50 @@ def cmd_predict(args: argparse.Namespace) -> int:
 
     # Helper: derive twin paths if user passes *_az.joblib or *_el.joblib
     def _twins_for(path: str) -> tuple[str, str]:
+        """
+        Return the twin AZ/EL model paths derived from the given base path.
+
+        Rules:
+        - If the user provides a path ending with '_az' or '_el', derive the twin by swapping the suffix.
+        - If the user provides a bare base name (with or without directory), automatically append
+          '_az.joblib' and '_el.joblib'.
+        - If no directory is specified, the default search directory is 'models/'.
+
+        Examples:
+        _twins_for("models/alpacino")  -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
+        _twins_for("alpacino")         -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
+        _twins_for("foo_el.joblib")    -> ("foo_az.joblib", "foo_el.joblib")
+        """
         base, ext = os.path.splitext(path)
+
+        # If no directory is provided, assume 'models/' as default search directory
+        if os.sep not in base and not base.startswith("models" + os.sep):
+            base = os.path.join("models", base)
+
+        def _ensure_joblib(p: str) -> str:
+            """Append .joblib extension if missing."""
+            b, e = os.path.splitext(p)
+            return p if e else (b + ".joblib")
+
+        # If the user passed a model ending in _az/_el, derive the twin by swapping suffixes
         if base.endswith("_az"):
-            return path, base[:-3] + "_el" + ext
+            return _ensure_joblib(base + ext), _ensure_joblib(base[:-3] + "_el" + ext)
         if base.endswith("_el"):
-            return base[:-3] + "_az" + ext, path
+            return _ensure_joblib(base[:-3] + "_az" + ext), _ensure_joblib(base + ext)
+
+        # No selector provided: create both AZ/EL paths, ensuring .joblib extension
+        if not ext:
+            return base + "_az.joblib", base + "_el.joblib"
         return base + "_az" + ext, base + "_el" + ext
 
     if args.az:
-        # Prefer exact path; else try suffix _az
-        model_path = args.model_path
-        if not (os.path.exists(model_path) and model_path.endswith(".joblib")):
-            base, ext = os.path.splitext(model_path)
-            cand = base + "_az" + (ext if ext else ".joblib")
-            if os.path.exists(cand):
-                model_path = cand
+        # Resolve path to the AZ model under 'models/' when no directory is given
+        model_path = _resolve_model_path_for_predict(args.model_path, axis="az")
         kind, payload = _load_bundle_with_meta(model_path)
-        _bind_backend(kind)
         off_az, off_el = predict_offsets_deg(
             payload, az_deg=args.azimuth, allow_extrapolation=args.allow_extrapolation
         )
+        unit = args.unit
         if unit == "arcmin":
             off_az *= 60
         elif unit == "arcsec":
@@ -623,18 +812,13 @@ def cmd_predict(args: argparse.Namespace) -> int:
         return 0
 
     if args.el:
-        # Prefer exact path; else try suffix _el
-        model_path = args.model_path
-        if not (os.path.exists(model_path) and model_path.endswith(".joblib")):
-            base, ext = os.path.splitext(model_path)
-            cand = base + "_el" + (ext if ext else ".joblib")
-            if os.path.exists(cand):
-                model_path = cand
+        # Resolve path to the EL model under 'models/' when no directory is given
+        model_path = _resolve_model_path_for_predict(args.model_path, axis="el")
         kind, payload = _load_bundle_with_meta(model_path)
-        _bind_backend(kind)
         off_az, off_el = predict_offsets_deg(
             payload, az_deg=args.azimuth, allow_extrapolation=args.allow_extrapolation
         )
+        unit = args.unit
         if unit == "arcmin":
             off_el *= 60
         elif unit == "arcsec":
@@ -668,17 +852,6 @@ def cmd_predict(args: argparse.Namespace) -> int:
         f"[AZ] offset_az={off_az_AZ:.4f} {unit}   "
         f"[EL] offset_el={off_el_EL:.4f} {unit}"
     )
-    return 0
-
-
-def cmd_summary(args: argparse.Namespace) -> int:
-    """
-    Print model summary. Auto-select the proper backend from bundle metadata.
-    Backward compatible with legacy bundles (assumed '1d').
-    """
-    kind, payload = _load_bundle_with_meta(args.model_path)
-    _bind_backend(kind)
-    print(model_summary(payload))
     return 0
 
 
@@ -785,15 +958,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow evaluation outside the observed linear azimuth range",
     )
     pp.set_defaults(func=cmd_predict)
-
-    # summary
-    ps = sub.add_parser(
-        "summary",
-        help="Print model summary",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    ps.add_argument("model_path", help="Path to .joblib bundle")
-    ps.set_defaults(func=cmd_summary)
 
     return p
 
