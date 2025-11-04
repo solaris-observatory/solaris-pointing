@@ -67,6 +67,7 @@ import argparse
 import os
 import importlib
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -87,8 +88,8 @@ def _unbound_backend(*args: Any, **kwargs: Any):
 
 # Placeholders so Ruff (F821) and static tools see defined names.
 fit_models_from_tsv: Callable[..., Any] = _unbound_backend
-load_model_bundle: Callable[..., Any] = _unbound_backend
-save_model_bundle: Callable[..., Any] = _unbound_backend
+load_model: Callable[..., Any] = _unbound_backend
+save_model: Callable[..., Any] = _unbound_backend
 predict_offsets_deg: Callable[..., Tuple[float, float]] = _unbound_backend
 model_summary: Callable[..., str] = _unbound_backend
 model_summary_axis: Callable[..., str] = _unbound_backend
@@ -100,8 +101,8 @@ _mad: Callable[["np.ndarray"], float] = _unbound_backend
 
 _REQUIRED_FUNS: List[str] = [
     "fit_models_from_tsv",
-    "load_model_bundle",
-    "save_model_bundle",
+    "load_model",
+    "save_model",
     "predict_offsets_deg",
     "model_summary",
     "model_summary_axis",
@@ -157,7 +158,7 @@ def _save_bundle_with_meta(bundle, path: str, backend_kind: str) -> None:
     format and keeps backward compatibility.
     """
     # 1) write the original bundle exactly as the backend expects
-    save_model_bundle(bundle, path)
+    save_model(bundle, path)
 
     # 2) write sidecar metadata
     meta_path = path + ".meta.json"
@@ -176,11 +177,11 @@ def _load_bundle_with_meta(path: str):
     Order of operations (fixed):
     1) Read the sidecar JSON (<path>.meta.json) to discover the backend kind.
        If missing (legacy bundles), default to "1d".
-    2) Bind the backend (so that load_model_bundle is available).
+    2) Bind the backend (so that load_model is available).
     3) Load the actual bundle payload with the backend's native loader.
     4) Return (backend_kind, payload).
 
-    This avoids calling load_model_bundle before binding the backend.
+    This avoids calling load_model before binding the backend.
     """
     # 1) Discover backend kind from sidecar (if present)
     meta_path = path + ".meta.json"
@@ -198,7 +199,7 @@ def _load_bundle_with_meta(path: str):
     _bind_backend(kind)
 
     # 3) Load the bundle payload using the backend's loader
-    payload = load_model_bundle(path)
+    payload = load_model(path)
 
     # 4) Return (kind, payload)
     return kind, payload
@@ -278,6 +279,57 @@ def _mk_mask(res, thr):
     if s == 0.0:
         return np.ones_like(res, dtype=bool)
     return np.abs(res) <= thr * s
+
+
+def _write_unified_bundle_and_summary(
+    *,
+    bundle,
+    out_models_dir: str,
+    stem: str,
+    wrote_az: bool,
+    wrote_el: bool,
+    save_model_func,
+    model_summary_func,
+    model_summary_axis_func,
+):
+    """
+    Write a 'unified' bundle alongside per-axis files.
+
+    Rules:
+    - If only AZ was fitted: unified .joblib == <stem>_az.joblib; summary = AZ only.
+    - If only EL was fitted: unified .joblib == <stem>_el.joblib; summary = EL only.
+    - If both were fitted:   unified .joblib contains both axes; summary = both axes.
+    """
+    out_models = Path(out_models_dir)
+    out_models.mkdir(parents=True, exist_ok=True)
+
+    unified_joblib = out_models / f"{stem}.joblib"
+    unified_summary = out_models / f"{stem}_summary.txt"
+
+    if wrote_az and not wrote_el:
+        # Mirror AZ file into unified name
+        src = out_models / f"{stem}_az.joblib"
+        if src.exists():
+            shutil.copy2(src, unified_joblib)
+        # Summary: AZ only
+        text = model_summary_axis_func(bundle, "az")
+        unified_summary.write_text(text)
+        return
+
+    if wrote_el and not wrote_az:
+        # Mirror EL file into unified name
+        src = out_models / f"{stem}_el.joblib"
+        if src.exists():
+            shutil.copy2(src, unified_joblib)
+        # Summary: EL only
+        text = model_summary_axis_func(bundle, "el")
+        unified_summary.write_text(text)
+        return
+
+    # Both axes were produced: save full bundle and full summary
+    save_model_func(bundle, str(unified_joblib))
+    text = model_summary_func(bundle)
+    unified_summary.write_text(text)
 
 
 # -----------
@@ -639,12 +691,27 @@ def cmd_fit(args: argparse.Namespace) -> int:
                 plt.close(fig)
                 print(f"Saved plot: {out_plot}")
 
+
+        wrote_az = wrote_el = False
         if "az" in axes:
             _write_axis("az")
+            wrote_az = True
         if "el" in axes:
             _write_axis("el")
+            wrote_el = True
 
         bundles_info.append((stem, bundle, path, az_lin, off_az, off_el, period_info))
+
+        _write_unified_bundle_and_summary(
+            bundle=bundle,
+            out_models_dir=models_dir,
+            stem=stem,
+            wrote_az=wrote_az,
+            wrote_el=wrote_el,
+            save_model_func=save_model,
+            model_summary_func=model_summary,
+            model_summary_axis_func=model_summary_axis,
+        )
 
         if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
             os.remove(work_path)

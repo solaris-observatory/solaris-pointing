@@ -4,7 +4,7 @@ offset_io_example.py
 
 Purpose
 -------
-This script demonstrates how to use the `offset_io` library from the
+This script demonstrates how to use the `io` library from the
 `solaris-pointing` project to produce a standard TSV output file containing
 telescope pointing offsets. It is meant as a minimal, end‑to‑end example that
 you can adapt to your own offset‑computation pipeline.
@@ -56,7 +56,7 @@ name, timestamps, offsets). The values shown here are placeholders to help you
 get started quickly.
 """
 
-from solaris_pointing.offset_core.offset_io import Metadata, Measurement, write_offsets_tsv
+from solaris_pointing.offsets.io import Metadata, Measurement, write_offsets_tsv
 
 # Metadata will be added to the header of the file
 md = Metadata(

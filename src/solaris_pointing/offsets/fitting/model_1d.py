@@ -65,7 +65,7 @@ A **±5° soft margin** is used at prediction time:
 ----------------------------------------------------------------------------
 Saved bundle format (joblib)
 ----------------------------------------------------------------------------
-``save_model_bundle`` writes a dict with:
+``save_model`` writes a dict with:
 
 - ``format``: 2 (new) or 1 (legacy).
 - ``az_model`` / ``el_model``:
@@ -80,7 +80,7 @@ Saved bundle format (joblib)
 - ``diag``: ``FitDiagnostics`` with counts and metrics (per axis)
 - Optionally, arrays ``az_lin``, ``offset_az``, ``offset_el`` (for inspection)
 
-``load_model_bundle`` accepts both format 2 and legacy format 1.
+``load_model`` accepts both format 2 and legacy format 1.
 
 ----------------------------------------------------------------------------
 Public API (used by the CLI)
@@ -107,7 +107,7 @@ Public API (used by the CLI)
     Human-readable summaries (per-axis variant prints only the requested axis),
     including the explicit analytic equation for polynomial / linear-basis.
 
-- ``save_model_bundle(bundle, path)`` / ``load_model_bundle(path) -> ModelBundle``
+- ``save_model(bundle, path)`` / ``load_model(path) -> ModelBundle``
 
 - ``_mad(x) -> float``: robust scale (1.4826 * MAD).
 
@@ -878,7 +878,7 @@ def model_summary(bundle: ModelBundle) -> str:
 # -------------------------
 
 
-def save_model_bundle(bundle: ModelBundle, path: str) -> None:
+def save_model(bundle: ModelBundle, path: str) -> None:
     """Save bundle to a .joblib file (backward-compatible).
 
     Format 1: both models are pure Polynomial -> store coef arrays.
@@ -960,7 +960,7 @@ def _load_metadata_from_dict(m: dict) -> ModelMetadata:
     return ModelMetadata(**base)
 
 
-def load_model_bundle(path: str) -> ModelBundle:
+def load_model(path: str) -> ModelBundle:
     d = joblib.load(path)
 
     # --- Unpack models
