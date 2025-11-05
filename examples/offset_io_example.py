@@ -61,6 +61,7 @@ from solaris_pointing.offsets.io import Metadata, Measurement, write_offsets_tsv
 # Metadata will be added to the header of the file
 md = Metadata(
     location="MZS, Antarctica",
+    code="MZS",
     antenna_diameter_m=2.0,
     frequency_ghz=100,
     software_version="2025.08.05",

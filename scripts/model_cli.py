@@ -1,64 +1,101 @@
 #!/usr/bin/env python3
-"""Fit pointing offsets with per-axis selection (az or el) and unified params.
+"""Fit, predict and merge pointing-offset models (per-axis or unified).
 
-This CLI wraps the core modeling library to fit, summarize, and predict telescope
-pointing offsets directly from TSV input files or saved model bundles (.joblib).
+This CLI provides a uniform interface to fit, predict, and merge telescope
+pointing-offset models from TSV data files or serialized bundles (.joblib).
+It supports independent per-axis models (AZ / EL) and automatically produces
+a unified bundle combining both when available.
+
+The tool is backend-agnostic (default backend: ``model_1d``). Each fitted model
+creates:
+- a .joblib model bundle for AZ and/or EL,
+- a PNG plot for each axis,
+- a human-readable text summary including a ready-to-copy Python function,
+- and a JSON metadata sidecar (.meta.json).
 
 -------------------------------------------------------------------------------
 Available subcommands
 -------------------------------------------------------------------------------
-fit       Fit az/el models from one or more TSV input files.
-predict   Predict az/el offsets for a given azimuth using saved model(s).
+fit       Fit AZ/EL models from one or more TSV files (shared parameters).
+predict   Predict AZ/EL offsets at a given azimuth from saved models.
+merge     Merge per-axis models into a unified <stem>.joblib bundle.
 
 -------------------------------------------------------------------------------
 Command-line usage examples
 -------------------------------------------------------------------------------
-1) Minimal default fit (both AZ and EL using default parameters):
-   python scripts/model_cli.py fit mydata.tsv
-   # Output models: models/mydata_az.joblib and models/mydata_el.joblib
-   # Plots and summaries are saved in the same directory.
+# --- FIT --------------------------------------------------------------------
 
-2) Fit both axes (default, no selector), unified params:
+1) Minimal fit (both AZ and EL, default parameters):
+   python scripts/model_cli.py fit mydata.tsv
+   # Outputs: models/mydata_az.joblib, models/mydata_el.joblib,
+   #          plots and summaries per axis,
+   #          plus models/mydata.joblib (unified bundle).
+
+2) Fit both axes with custom parameters:
    python scripts/model_cli.py fit alpacino.tsv \
        --degree 3 --zscore 2.5 --fourier-k 2 --plot-unit arcmin
 
-3) Fit AZIMUTH only:
+3) Fit AZ only:
    python scripts/model_cli.py fit alpacino.tsv --az \
-       --degree 3 --zscore 2.5 --fourier-k 2 --sector-edges-deg 360
+       --degree 3 --zscore 2.5 --fourier-k 2
 
-4) Fit ELEVATION only:
+4) Fit EL only:
    python scripts/model_cli.py fit alpacino.tsv --el \
        --degree 3 --zscore 2.5 --fourier-k 1 --periods-deg 90,45
 
-5) Predict both axes (--az and --el) if no selector):
-   python scripts/model_cli.py predict alpacino \
-       --azimuth 12.0 --unit arcsec
-   # This will try models/alpacino_az.joblib and models/alpacino_el.joblib.
+5) Fit multiple TSV files (combined plots are generated automatically):
+   python scripts/model_cli.py fit new.tsv oranges.tsv \
+       --degree 2 --zscore 2.0 --plot-unit arcmin
+   # Produces combined plots: models/new+oranges_az.png and _el.png
 
-   Only --az:
+6) Fit with input offsets in arcseconds:
+   python scripts/model_cli.py fit data.tsv --input-offset-unit arcsec
+
+# --- PREDICT ---------------------------------------------------------------
+
+7) Predict both axes (no selector flags):
+   python scripts/model_cli.py predict alpacino --azimuth 12.0 --unit arcsec
+   # Loads: models/alpacino_az.joblib and models/alpacino_el.joblib
+
+8) Predict AZ only:
    python scripts/model_cli.py predict alpacino --az \
        --azimuth 12.0 --unit arcsec
 
--------------------------------------------------------------------------------
-Input and output conventions
--------------------------------------------------------------------------------
-- Input TSV files are searched under `offsets/` if no directory component is
-  given in the path. If a directory is included, the file is taken as-is.
-- Default output directory for models and plots is `models/`.
+9) Predict EL only:
+   python scripts/model_cli.py predict models/alpacino_el.joblib --el \
+       --azimuth 12.0 --unit arcmin
+
+10) Predict with extrapolation beyond observed azimuth range:
+    python scripts/model_cli.py predict alpacino --az \
+        --azimuth 355.0 --allow-extrapolation
+
+# --- MERGE -----------------------------------------------------------------
+
+11) Merge existing per-axis models into a unified bundle:
+    python scripts/model_cli.py merge alpacino
+    # Reads:  models/alpacino_az.joblib and models/alpacino_el.joblib
+    # Writes: models/alpacino.joblib (+ metadata sidecar .meta.json)
 
 -------------------------------------------------------------------------------
-Parameters and their physical meaning (unified)
+Input / output conventions
 -------------------------------------------------------------------------------
-- `degree` (int): polynomial degree for the fit (1=linear, 2=quadratic, ...).
-- `zscore` (float): robust MAD-based threshold for outlier rejection.
-- `ridge-alpha` (float): L2 regularization strength (default 0.01).
-- `fourier-k` (int): number of Fourier harmonics (0 disables).
-- `periods-deg` (str): comma-separated list of custom periods (degrees).
-- `sector-edges-deg` (str): comma-separated list of sector edges (degrees).
-- `input-offset-unit` (deg|arcmin|arcsec): unit for offset columns in TSV.
-- `plot-unit` (deg|arcmin|arcsec): rendering unit for plots (Y axis).
-- `notes` (str): free text stored in the model metadata for traceability.
+- TSV inputs are looked up under ``offsets/`` if no directory is given.
+- Models, plots, and summaries are written under ``models/``.
+- Summaries include: text statistics, MAD_t/MAD_i in chosen unit,
+  and a **Python function** defining the offset model.
 
+-------------------------------------------------------------------------------
+Unified parameters (shared by both axes)
+-------------------------------------------------------------------------------
+--degree (int)                  Polynomial degree.
+--zscore (float)                Robust outlier threshold (MAD-based).
+--ridge-alpha (float)           L2 regularization factor.
+--fourier-k (int)               Number of Fourier harmonics (0 disables).
+--periods-deg (list[str])       Custom Fourier periods, e.g. "6,11.25".
+--sector-edges-deg (list[str])  Sector edges in degrees, e.g. "60,210".
+--input-offset-unit (str)       Input unit of offsets (deg|arcmin|arcsec).
+--plot-unit (str)               Y-axis unit in saved plots (deg|arcmin|arcsec).
+--notes (str)                   Free text stored in metadata for traceability.
 """
 
 from __future__ import annotations
@@ -69,7 +106,6 @@ import importlib
 import json
 import shutil
 from pathlib import Path
-from math import isnan
 
 import numpy as np
 import pandas as pd
@@ -79,7 +115,6 @@ from typing import Any, Callable, Tuple, List
 
 
 # --- Dynamic model backend loader -------------------------------------------
-
 
 def _unbound_backend(*args: Any, **kwargs: Any):
     raise RuntimeError(
@@ -151,7 +186,6 @@ def _bind_backend(kind: str):
 
 # ---- Bundle metadata shims -----------------------------------------------
 
-
 def _save_bundle_with_meta(bundle, path: str, backend_kind: str) -> None:
     """
     Save the bundle using the backend's native saver, and write the backend kind
@@ -204,7 +238,6 @@ def _load_bundle_with_meta(path: str):
 
     # 4) Return (kind, payload)
     return kind, payload
-
 
 # ------------------------------------------------------------------
 
@@ -692,7 +725,6 @@ def cmd_fit(args: argparse.Namespace) -> int:
                 plt.close(fig)
                 print(f"Saved plot: {out_plot}")
 
-
         wrote_az = wrote_el = False
         if "az" in axes:
             _write_axis("az")
@@ -702,17 +734,18 @@ def cmd_fit(args: argparse.Namespace) -> int:
             wrote_el = True
 
         bundles_info.append((stem, bundle, path, az_lin, off_az, off_el, period_info))
-
-        _write_unified_bundle_and_summary(
-            bundle=bundle,
-            out_models_dir=models_dir,
-            stem=stem,
-            wrote_az=wrote_az,
-            wrote_el=wrote_el,
-            save_model_func=save_model,
-            model_summary_func=model_summary,
-            model_summary_axis_func=model_summary_axis,
-        )
+        # --- create unified artifacts ONLY when both axes are fitted together ---
+        if not (args.az or args.el):
+            _write_unified_bundle_and_summary(
+                bundle=bundle,
+                out_models_dir=models_dir,
+                stem=stem,
+                wrote_az=wrote_az,
+                wrote_el=wrote_el,
+                save_model_func=save_model,
+                model_summary_func=model_summary,
+                model_summary_axis_func=model_summary_axis,
+            )
 
         if work_path.endswith(".deg.tmp.tsv") and os.path.exists(work_path):
             os.remove(work_path)
@@ -741,7 +774,15 @@ def cmd_fit(args: argparse.Namespace) -> int:
         # ---- AZ combined ----
         if not args.el:  # plot AZ if --el not exclusive
             fig1, ax1 = plt.subplots(figsize=(7, 4))
-            for (stem, bundle, path, az_lin, off_az, off_el, _period_info) in bundles_sorted:
+            for (
+                stem,
+                bundle,
+                path,
+                az_lin,
+                off_az,
+                off_el,
+                _period_info,
+            ) in bundles_sorted:
                 if bundle.az_model is None:
                     continue
                 yhat = bundle.az_model(az_lin)
@@ -767,7 +808,15 @@ def cmd_fit(args: argparse.Namespace) -> int:
         # ---- EL combined ----
         if not args.az:  # plot EL if --az not exclusive
             fig2, ax2 = plt.subplots(figsize=(7, 4))
-            for (stem, bundle, path, az_lin, off_az, off_el, _period_info) in bundles_sorted:
+            for (
+                stem,
+                bundle,
+                path,
+                az_lin,
+                off_az,
+                off_el,
+                _period_info,
+            ) in bundles_sorted:
                 if bundle.el_model is None:
                     continue
                 yhat = bundle.el_model(az_lin)
@@ -847,7 +896,7 @@ def _resolve_model_path_for_predict(user_path: str, axis: str | None) -> str:
       the proper axis suffix and .joblib when needed).
     - If 'user_path' has no directory, prepend 'models/'.
     - If 'axis' is provided ('az' or 'el'):
-        * If the basename already ends with '_az'/'_el', keep it and only ensure .joblib.
+        * If basename already ends with '_az'/'_el', keep it and only ensure .joblib.
         * Otherwise, append f'_{axis}' and ensure .joblib.
     - If 'axis' is None, just ensure .joblib if missing (used rarely here).
     """
@@ -905,15 +954,19 @@ def cmd_predict(args: argparse.Namespace) -> int:
         Return the twin AZ/EL model paths derived from the given base path.
 
         Rules:
-        - If the user provides a path ending with '_az' or '_el', derive the twin by swapping the suffix.
-        - If the user provides a bare base name (with or without directory), automatically append
-          '_az.joblib' and '_el.joblib'.
+        - If the user provides a path ending with '_az' or '_el', derive the
+          twin by swapping the suffix.
+        - If the user provides a bare base name (with or without directory),
+          automatically append '_az.joblib' and '_el.joblib'.
         - If no directory is specified, the default search directory is 'models/'.
 
         Examples:
-        _twins_for("models/alpacino")  -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
-        _twins_for("alpacino")         -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
-        _twins_for("foo_el.joblib")    -> ("foo_az.joblib", "foo_el.joblib")
+        _twins_for("models/alpacino")
+            -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
+        _twins_for("alpacino")
+            -> ("models/alpacino_az.joblib", "models/alpacino_el.joblib")
+        _twins_for("foo_el.joblib")
+            -> ("foo_az.joblib", "foo_el.joblib")
         """
         base, ext = os.path.splitext(path)
 
@@ -926,7 +979,8 @@ def cmd_predict(args: argparse.Namespace) -> int:
             b, e = os.path.splitext(p)
             return p if e else (b + ".joblib")
 
-        # If the user passed a model ending in _az/_el, derive the twin by swapping suffixes
+        # If the user passed a model ending in _az/_el, derive the
+        # twin by swapping suffixes
         if base.endswith("_az"):
             return _ensure_joblib(base + ext), _ensure_joblib(base[:-3] + "_el" + ext)
         if base.endswith("_el"):
@@ -996,6 +1050,53 @@ def cmd_predict(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_merge(args: argparse.Namespace) -> int:
+    """
+    Merge two per-axis bundles (AZ and EL) into a unified bundle saved
+    as models/{stem}.joblib.
+
+    Rules:
+    - Load models/{stem}_az.joblib and models/{stem}_el.joblib
+      (auto-binding backends via sidecar).
+    - Require same backend kind.
+    - Use AZ payload as base; set its 'el_model' from EL payload.
+    - Save unified bundle as models/{stem}.joblib (+ sidecar metadata).
+    """
+    stem = args.stem.strip()
+    az_path = _model_path_for(stem, "az")
+    el_path = _model_path_for(stem, "el")
+
+    if not os.path.exists(az_path):
+        raise SystemExit(f"Missing AZ model: {az_path}")
+    if not os.path.exists(el_path):
+        raise SystemExit(f"Missing EL model: {el_path}")
+
+    kind_az, payload_az = _load_bundle_with_meta(az_path)
+    kind_el, payload_el = _load_bundle_with_meta(el_path)
+
+    if kind_az != kind_el:
+        raise SystemExit(
+            f"Backend mismatch between AZ ({kind_az}) and EL ({kind_el}). "
+            "Re-fit or re-save with the same backend."
+        )
+
+    # Compose unified bundle:
+    base = payload_az
+    # Ensure attributes exist; fall back to error if missing
+    if not hasattr(base, "az_model"):
+        raise SystemExit("AZ payload has no 'az_model' attribute.")
+    if not hasattr(payload_el, "el_model"):
+        raise SystemExit("EL payload has no 'el_model' attribute.")
+
+    setattr(base, "el_model", getattr(payload_el, "el_model"))
+
+    # Save unified
+    out_path = os.path.join(_default_models_dir(), f"{stem}.joblib")
+    _save_bundle_with_meta(base, out_path, backend_kind=kind_az)
+    print(f"Saved unified model: {out_path}")
+    return 0
+
+
 # -------------
 # Main / Parser
 # -------------
@@ -1009,7 +1110,7 @@ def build_parser() -> argparse.ArgumentParser:
     # fit
     pf = sub.add_parser(
         "fit",
-        help="Fit models from TSV (unified params; choose --az/--el or both by default)",
+        help="Fit models from TSV (choose --az/--el or both by default)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     pf.add_argument("tsv", nargs="+", help="Input TSV path(s)")
@@ -1099,6 +1200,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow evaluation outside the observed linear azimuth range",
     )
     pp.set_defaults(func=cmd_predict)
+
+    # merge
+    pm = sub.add_parser(
+        "merge",
+        help="Merge {stem}_az.joblib and {stem}_el.joblib into {stem}.joblib",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    pm.add_argument("stem", help="Base stem of the model files under 'models/'")
+    pm.set_defaults(func=cmd_merge)
 
     return p
 

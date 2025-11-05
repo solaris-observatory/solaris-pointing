@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 # Module under test
-import solaris_pointing.fitting.az_model as m
+import solaris_pointing.offsets.fitting.model_1d as m
 
 
 def write_tsv(path: Path, df: pd.DataFrame, with_header: bool = True) -> None:

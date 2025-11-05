@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 
-from solaris_pointing.offset_io import Metadata, Measurement, write_offsets_tsv
+from solaris_pointing.offsets.io import Metadata, Measurement, write_offsets_tsv
 
 
 # Integration test: ensure env fields that are non-finite are serialized as "NaN".

@@ -6,11 +6,8 @@ htmlcov
 .hypothesis
 .tox/
 output_example*
-orange*
 logs/
-offsets/*.tsv
-models/orange*
-models/marongiu*
-models/buttu*
+/offsets
+/models
 TODO.txt
 myalgo*

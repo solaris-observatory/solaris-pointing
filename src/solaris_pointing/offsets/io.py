@@ -39,7 +39,8 @@ the dataset. Overwrites use an atomic write via a temporary file.
 Quickstart
 ----------
 >>> md = Metadata(
-...     location="Dome C, Antarctica",
+...     location="Mario Zucchelli Station, Antarctica",
+...     code="MZS",
 ...     antenna_diameter_m=1.2,
 ...     frequency_ghz=100,
 ...     software_version="1.4.0",
@@ -90,6 +91,8 @@ class Metadata:
     ----------
     location : str
         Site name / location string.
+    code : str
+        Location code
     antenna_diameter_m : float
         Antenna diameter in meters.
     frequency_ghz : float
@@ -102,6 +105,7 @@ class Metadata:
     """
 
     location: str
+    code: str
     antenna_diameter_m: float
     frequency_ghz: float
     software_version: str
@@ -184,6 +188,7 @@ def _write_metadata_block(f: TextIO, md: Metadata) -> None:
     f.write("# Telescope\n")
     f.write("# ---------\n")
     f.write(f"# Location: {md.location}\n")
+    f.write(f"# Code: {md.code}\n")
     f.write(f"# Antenna diameter: {md.antenna_diameter_m} m\n")
     f.write(f"# Frequency: {md.frequency_ghz} GHz\n")
     f.write("#\n")
@@ -351,7 +356,8 @@ def write_offsets_tsv(
 if __name__ == "__main__":
     # Minimal smoke test / example writer. Adjust values as needed.
     md = Metadata(
-        location="Dome C, Antarctica",
+        location="Mario Zucchelli Station, Antarctica",
+        code="MZS",
         antenna_diameter_m=1.2,
         frequency_ghz=100,
         software_version="1.4.0",
