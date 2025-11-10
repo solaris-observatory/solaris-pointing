@@ -392,7 +392,8 @@ def wrap_az(az: float) -> float:
 def nearest_path_observed(
     t_centroid_s: float, t_path: np.ndarray, az_path: np.ndarray, el_path: np.ndarray
 ) -> Tuple[float, float]:
-    """Observed az/el at centroid time using the NEAREST .path sample (no interpolation)."""
+    """Observed az/el at centroid time using the NEAREST .path sample
+    (no interpolation)."""
     idx = int(np.searchsorted(t_path, t_centroid_s))
     # pick nearer between idx-1 and idx
     if idx <= 0:

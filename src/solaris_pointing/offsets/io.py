@@ -40,7 +40,6 @@ Quickstart
 ----------
 >>> md = Metadata(
 ...     location="Mario Zucchelli Station, Antarctica",
-...     code="MZS",
 ...     antenna_diameter_m=1.2,
 ...     frequency_ghz=100,
 ...     software_version="1.4.0",
@@ -91,8 +90,6 @@ class Metadata:
     ----------
     location : str
         Site name / location string.
-    code : str
-        Location code
     antenna_diameter_m : float
         Antenna diameter in meters.
     frequency_ghz : float
@@ -105,7 +102,6 @@ class Metadata:
     """
 
     location: str
-    code: str
     antenna_diameter_m: float
     frequency_ghz: float
     software_version: str
@@ -188,7 +184,6 @@ def _write_metadata_block(f: TextIO, md: Metadata) -> None:
     f.write("# Telescope\n")
     f.write("# ---------\n")
     f.write(f"# Location: {md.location}\n")
-    f.write(f"# Code: {md.code}\n")
     f.write(f"# Antenna diameter: {md.antenna_diameter_m} m\n")
     f.write(f"# Frequency: {md.frequency_ghz} GHz\n")
     f.write("#\n")
@@ -329,7 +324,8 @@ def write_offsets_tsv(
             expected = _expected_columns()
             if on_disk != expected:
                 raise SchemaMismatchError(
-                    f"Header mismatch when appending. On disk: {on_disk} ; expected: {expected}"
+                    f"Header mismatch when appending. On disk: {on_disk} ; "
+                    f"expected: {expected}"
                 )
             with p.open("a", encoding="utf-8") as f:
                 for m in rows:
@@ -357,7 +353,6 @@ if __name__ == "__main__":
     # Minimal smoke test / example writer. Adjust values as needed.
     md = Metadata(
         location="Mario Zucchelli Station, Antarctica",
-        code="MZS",
         antenna_diameter_m=1.2,
         frequency_ghz=100,
         software_version="1.4.0",

@@ -718,7 +718,8 @@ def model_summary_axis(bundle: ModelBundle, axis: str) -> str:
       - diagnostics for the requested axis only
       - an explicit analytic equation of the fitted curve
         * Polynomial case: y = c0 + c1·x + c2·x^2 + ...
-        * Linear-basis (poly + Fourier): polynomial + sum_k (A_k cos(...) + B_k sin(...))
+        * Linear-basis (poly + Fourier):
+          polynomial + sum_k (A_k cos(...) + B_k sin(...))
     """
     axis = axis.lower().strip()
     if axis not in ("az", "el"):
@@ -785,7 +786,8 @@ def model_summary_axis(bundle: ModelBundle, axis: str) -> str:
         return f"y(x) = {rhs}"
 
     def _equation_str(m) -> str:
-        """Return an explicit equation string for model m (Polynomial or LinearBasisModel)."""
+        """Return an explicit equation string for model m
+        (Polynomial or LinearBasisModel)."""
         if isinstance(m, Polynomial):
             return _poly_to_str(m)
         # Assume LinearBasisModel-like
@@ -1000,9 +1002,7 @@ def load_model(path: str) -> ModelBundle:
             el_model = Polynomial(np.asarray(d["el_coef"], dtype=float))
 
     # --- Metadata / diagnostics (tolerant to older/newer fields) ---
-    meta = _load_metadata_from_dict(
-        d["meta"]
-    )  # keeps only known dataclass fields. :contentReference[oaicite:1]{index=1}
+    meta = _load_metadata_from_dict(d["meta"])  # keeps only known dataclass fields.
 
     diag_dict = d.get("diag", {})
     if isinstance(diag_dict, dict):
@@ -1010,7 +1010,7 @@ def load_model(path: str) -> ModelBundle:
     else:
         diag = diag_dict  # already a FitDiagnostics
 
-    # Optional arrays if present; keep None otherwise. :contentReference[oaicite:2]{index=2}
+    # Optional arrays if present; keep None otherwise.
     az_lin = d.get("az_lin")
     off_az = d.get("offset_az")
     off_el = d.get("offset_el")

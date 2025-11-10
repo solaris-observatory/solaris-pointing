@@ -44,9 +44,7 @@ ideal_az_deg = 80.0000
 ideal_el_deg = 40.0000
 
 # Compute the offsets (in degrees) predicted at this azimuth.
-off_az_deg, off_el_deg = predict_offsets_deg(
-    model, az_deg=ideal_az_deg
-)
+off_az_deg, off_el_deg = predict_offsets_deg(model, az_deg=ideal_az_deg)
 
 # 3) Apply offsets to obtain corrected (commanded) coordinates.
 #    Sign convention: "corrected = ideal + offset"
@@ -57,10 +55,12 @@ corr_el_deg = ideal_el_deg + off_el_deg
 print(
     "Input (ideal) az, el:",
     f"{ideal_az_deg:.4f} deg",
-    f"{ideal_el_deg:.4f} deg", 
+    f"{ideal_el_deg:.4f} deg",
 )
 print("Predicted offsets [deg]:   ", f"{off_az_deg:.4f}", f"{off_el_deg:.4f}")
-print("Predicted offsets [arcmin]:   ", f"{off_az_deg*60:.4f}", f"{off_el_deg*60:.4f}")
+print(
+    "Predicted offsets [arcmin]:   ", f"{off_az_deg * 60:.4f}", f"{off_el_deg * 60:.4f}"
+)
 print("Corrected (cmd) az, el:", f"{corr_az_deg:.4f}", f"{corr_el_deg:.4f}")
 
 # Tip: Refit models every N days so that the "azimuth-only" approximation

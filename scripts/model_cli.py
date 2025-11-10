@@ -116,6 +116,7 @@ from typing import Any, Callable, Tuple, List
 
 # --- Dynamic model backend loader -------------------------------------------
 
+
 def _unbound_backend(*args: Any, **kwargs: Any):
     raise RuntimeError(
         "Backend not bound yet. Call _bind_backend(<kind>) before using backend APIs."
@@ -186,6 +187,7 @@ def _bind_backend(kind: str):
 
 # ---- Bundle metadata shims -----------------------------------------------
 
+
 def _save_bundle_with_meta(bundle, path: str, backend_kind: str) -> None:
     """
     Save the bundle using the backend's native saver, and write the backend kind
@@ -238,6 +240,7 @@ def _load_bundle_with_meta(path: str):
 
     # 4) Return (kind, payload)
     return kind, payload
+
 
 # ------------------------------------------------------------------
 
@@ -917,12 +920,12 @@ def _resolve_model_path_for_predict(user_path: str, axis: str | None) -> str:
     if axis in ("az", "el"):
         if name.endswith("_az") or name.endswith("_el"):
             # User already provided an axis-suffixed basename; just ensure .joblib
-            return ensure_joblib(base + e)
+            return ensure_joblib(base)
         # Append the requested axis and ensure .joblib
-        return ensure_joblib(f"{b}_{axis}{e if e else ''}")
+        return ensure_joblib(f"{b}_{axis}{e}")
 
     # No axis provided: just ensure .joblib
-    return ensure_joblib(base + e)
+    return ensure_joblib(base)
 
 
 def cmd_predict(args: argparse.Namespace) -> int:

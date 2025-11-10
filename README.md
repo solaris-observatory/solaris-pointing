@@ -86,6 +86,7 @@ Reload your shell and install `poetry-plugin-shell`:
 
 ```bash
 exec "$SHELL"
+poetry env activate
 poetry self add poetry-plugin-shell
 ```
 
