@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from hypothesis import strategies as st
 
-from solaris_pointing.offset_io import Metadata, Measurement
+from solaris_pointing.offsets.io import Metadata, Measurement
 
 # ---------- Shared fixtures ----------
 
@@ -15,7 +15,7 @@ def md() -> Metadata:
     return Metadata(
         location="MZS, Antarctica",
         antenna_diameter_m=2.0,
-        frequency_hz=100e9,
+        frequency_ghz=100e9,
         software_version="2025.08.05",
         created_at_iso="2025-08-05T11:00:00Z",
     )
@@ -25,6 +25,7 @@ def md() -> Metadata:
 def sample_row() -> Measurement:
     """Provide a representative Measurement row."""
     return Measurement(
+        map_id="250103T000235_OASI",
         timestamp_iso="2025-08-01T10:00:00Z",
         azimuth_deg=123.456,
         elevation_deg=45.789,

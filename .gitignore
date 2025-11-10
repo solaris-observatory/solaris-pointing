@@ -6,3 +6,8 @@ htmlcov
 .hypothesis
 .tox/
 output_example*
+logs/
+/offsets
+/models
+TODO.txt
+myalgo*

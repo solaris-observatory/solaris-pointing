@@ -4,7 +4,7 @@ offset_io_example.py
 
 Purpose
 -------
-This script demonstrates how to use the `offset_io` library from the
+This script demonstrates how to use the `io` library from the
 `solaris-pointing` project to produce a standard TSV output file containing
 telescope pointing offsets. It is meant as a minimal, end‑to‑end example that
 you can adapt to your own offset‑computation pipeline.
@@ -56,13 +56,13 @@ name, timestamps, offsets). The values shown here are placeholders to help you
 get started quickly.
 """
 
-from solaris_pointing.offset_io import Metadata, Measurement, write_offsets_tsv
+from solaris_pointing.offsets.io import Metadata, Measurement, write_offsets_tsv
 
 # Metadata will be added to the header of the file
 md = Metadata(
     location="MZS, Antarctica",
     antenna_diameter_m=2.0,
-    frequency_hz=100e9,
+    frequency_ghz=100,
     software_version="2025.08.05",
 )
 
@@ -71,11 +71,12 @@ rows = []  # Rows of data, one for each map, that you want to append to the file
 # For every map of that location, append the corresponding raw data.
 rows.append(
     Measurement(
-        timestamp_iso="2025-08-01T10:00:00Z",
-        azimuth_deg=123.456,
-        elevation_deg=45.789,
-        offset_az_deg=0.0034,
-        offset_el_deg=-0.0023,
+        map_id="20250801T101011",
+        timestamp_iso="2025-08-01T10:00:00Z",  # At Sun's centroid
+        azimuth_deg=123.456,  # azimuth of the Sun's centroid from ephemerides
+        elevation_deg=45.789,  # azimuth of the Sun's centroid from ephemerides
+        offset_az_deg=0.0034,  # observed azimuth - solar azimuth
+        offset_el_deg=-0.0023,  # observed elevation - solar elevation
         temperature_c=None,  # will be written as "NaN"
         pressure_hpa=None,  # will be written as "NaN"
         humidity_frac=None,  # will be written as "NaN"
@@ -93,6 +94,7 @@ write_offsets_tsv("output_offset_io_example.tsv", md, rows, append=True)
 #
 # row = [
 #    Measurement(
+#        map_id="20250801T101011",
 #        timestamp_iso="2025-08-01T10:00:00Z",
 #        azimuth_deg=123.456,
 #        elevation_deg=45.789,
