@@ -65,27 +65,36 @@ Offsets are computed as:
     daz = az_observed_centroid - az_ephemeris_centroid
     del = el_observed_centroid - el_ephemeris_centroid
 
-Azimuth bias and wrapping
--------------------------
-- A fixed azimuth bias of +0.75 deg is applied to the observed azimuths
-  (instrumental encoder convention).
-- Azimuths are wrapped to the [0, 360) deg range so that offsets correspond
-  to the shortest angular distance.
+Bias and wrapping
+-----------------
+- Azimuth and elevation bias (default +0.0 deg) are applied to the
+  offsets (instrumental encoder convention). The values are configurable
+  via CLI option: ``--az-offset-bias`` and ``--el-offset-bias``
+- Azimuths are wrapped to the [0, 360) deg range so that offsets
+  correspond to the shortest angular distance.
 
 Coordinate and atmospheric model
 --------------------------------
 All positions are expressed in the apparent AltAz frame as computed by
-Astropy. Atmospheric refraction is included through the following parameters,
-typical for MZS summer conditions and a 2 m antenna operating near 100 GHz:
+Astropy. Atmospheric refraction can be enabled with the `--enable-refraction` flag
+(disabled by default). When enabled, the following parameters are used and
+are configurable via CLI (defaults shown, typical for MZS summer and ~100 GHz):
 
-- pressure = 990 hPa
-- temperature = -5 C
-- relative_humidity = 0.2
-- obswl = 3 mm  (approx. 100 GHz)
+- pressure = 990 hPa (``--pressure``)
+- temperature = -5 C (``--temperature``)
+- relative_humidity = 0.2 (``--humidity``)
+- obswl = 3 mm  (``--obswl``; approx. 100 GHz)
 
-The observing site is defined as:
+The observing site defaults to:
 latitude = -74.694 deg, longitude = 164.120 deg, height = 50 m.
-The height is used by EarthLocation to compute the local geocentric position.
+These coordinates are configurable via CLI options. The height is
+used by EarthLocation to compute the local geocentric position.
+
+Thresholds
+----------
+The following selection thresholds are configurable via CLI:
+- ``--peak-frac`` (default 0.75)
+- ``--central-power-frac`` (default 0.60)
 
 Output format
 -------------
@@ -125,7 +134,6 @@ for scientific pointing calibration.
 
 Possible extensions
 -------------------
-- Make thresholds and atmospheric parameters configurable via CLI options.
 - Add optional pre-filtering of .sky glitches (e.g., using MAD).
 - Provide uncertainty estimates on daz, del using scan-to-scan variance.
 - Support median-based centroid estimation as an alternative to the mean.
@@ -134,6 +142,7 @@ Possible extensions
 import os
 import glob
 import csv
+import argparse
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -146,19 +155,6 @@ from solaris_pointing.offsets.io import (
     Measurement,
     write_offsets_tsv,
 )
-
-# --- Site coordinates (fixed as requested) ---
-SITE_LON_DEG = 164.1000
-SITE_LAT_DEG = -74.6933
-
-# --- Azimuth bias and wrapping ---
-AZIMUTH_BIAS_DEG = 0.75
-
-# --- Sky thresholds (compat mode) ---
-ABS_SIGNAL_MIN = 30000.0  # absolute filter on sky samples (legacy-like)
-REL_PEAK_FRAC = 0.75  # keep samples >= 80% of scan max power
-# It was 0.75, 0.55 gives a better MAD
-REL_CENTRAL_POWER_FRAC = 0.55  # keep scans with central_power >= 55% of MaxCentralPower
 
 
 @dataclass
@@ -267,6 +263,7 @@ def choose_scan_and_centroid_time(
     f0: np.ndarray,
     sky_times: np.ndarray,
     sky_vals: np.ndarray,
+    args: argparse.Namespace,
 ) -> Optional[Tuple[Tuple[int, int], float, float]]:
     """
     Return (segment, t_centroid, central_power) where:
@@ -277,9 +274,9 @@ def choose_scan_and_centroid_time(
 
     Selection:
       1) For each scan (contiguous F0==1 in path), collect .sky samples within
-         [t[a], t[b-1]] and pre-filter them by ABS_SIGNAL_MIN.
+         [t[a], t[b-1]].
       2) Let scan_max = percentile_99.9 of the scan's filtered sky power.
-         Keep samples with power >= REL_PEAK_FRAC * scan_max.
+         Keep samples with power >= args.peak_frac * scan_max.
       3) Compute:
            - central_power = mean(power_above_threshold)
            - t_centroid = time-weighted centroid (baricenter) of the
@@ -289,7 +286,7 @@ def choose_scan_and_centroid_time(
                  dt    = t[i+1] - t[i]
                  t_centroid = sum(mid_t * mid_s * dt) / sum(mid_s * dt)
              If only one selected sample exists, fall back to its timestamp.
-      4) Keep scans with central_power >= REL_CENTRAL_POWER_FRAC * MaxCentralPower.
+      4) Keep scans with central_power >= args.central_power_frac * MaxCentralPower.
       5) Choose the middle-by-index scan among the kept ones.
 
     Returns None if no suitable scan is found.
@@ -298,11 +295,7 @@ def choose_scan_and_centroid_time(
     if not segs:
         return None
 
-    # Pre-filter sky by absolute threshold (legacy-like)
-    sky_mask_abs = sky_vals > ABS_SIGNAL_MIN
-    sky_times_abs = sky_times[sky_mask_abs]
-    sky_vals_abs = sky_vals[sky_mask_abs]
-    if sky_times_abs.size == 0:
+    if sky_times.size == 0:
         return None
 
     chosen_list = []  # (seg_index, (a,b), t_centroid, central_power)
@@ -314,13 +307,13 @@ def choose_scan_and_centroid_time(
         t1 = t_path[b - 1]
 
         # Select sky within scan time window: include t0, exclude t1
-        i0 = np.searchsorted(sky_times_abs, t0, side="left")
-        i1 = np.searchsorted(sky_times_abs, t1, side="left")
+        i0 = np.searchsorted(sky_times, t0, side="left")
+        i1 = np.searchsorted(sky_times, t1, side="left")
         if i1 <= i0:
             continue
 
-        st = sky_times_abs[i0:i1]
-        sv = sky_vals_abs[i0:i1]
+        st = sky_times[i0:i1]
+        sv = sky_vals[i0:i1]
         if sv.size == 0:
             continue
 
@@ -329,7 +322,7 @@ def choose_scan_and_centroid_time(
         if scan_max <= 0:
             continue
 
-        keep = sv >= (REL_PEAK_FRAC * scan_max)
+        keep = sv >= (args.peak_frac * scan_max)
         if not np.any(keep):
             continue
 
@@ -372,7 +365,7 @@ def choose_scan_and_centroid_time(
 
     central_powers = np.array([cp for _, _, _, cp in chosen_list], dtype=float)
     max_cp = float(np.max(central_powers))
-    thr_cp = REL_CENTRAL_POWER_FRAC * max_cp
+    thr_cp = args.central_power_frac * max_cp
 
     kept = [(i, seg, tc, cp) for (i, seg, tc, cp) in chosen_list if cp >= thr_cp]
     if not kept:
@@ -390,7 +383,11 @@ def wrap_az(az: float) -> float:
 
 
 def nearest_path_observed(
-    t_centroid_s: float, t_path: np.ndarray, az_path: np.ndarray, el_path: np.ndarray
+    t_centroid_s: float,
+    t_path: np.ndarray,
+    az_path: np.ndarray,
+    el_path: np.ndarray,
+    args: argparse.Namespace,
 ) -> Tuple[float, float]:
     """Observed az/el at centroid time using the NEAREST .path sample
     (no interpolation)."""
@@ -406,15 +403,30 @@ def nearest_path_observed(
         dist_left = abs(t_centroid_s - t_path[left])
         dist_right = abs(t_path[idx] - t_centroid_s)
         k = left if dist_left <= dist_right else idx
-    az_obs = wrap_az(float(az_path[k]) + AZIMUTH_BIAS_DEG)
+    az_obs = wrap_az(float(az_path[k]))
     el_obs = float(el_path[k])
     return az_obs, el_obs
 
 
-def compute_ephem(
-    dt_utc: datetime, lat_deg: float, lon_deg: float
-) -> Tuple[float, float]:
-    """Return (az_deg, el_deg) using Astropy. Azimuth wrapped to [0, 360)."""
+def compute_ephem(dt_utc: datetime, args: argparse.Namespace) -> Tuple[float, float]:
+    """Return (az_deg, el_deg) using Astropy.
+
+    Parameters
+    ----------
+    dt_utc : datetime
+        Timestamp in UTC for which to compute ephemerides.
+    args : argparse.Namespace
+        Parsed CLI arguments. If ``args.enable_refraction`` is True, the AltAz
+        frame is built with atmospheric parameters provided via CLI
+        (``pressure``, ``temperature``, ``humidity``,
+        ``obswl``). If False (default), the AltAz frame is built without
+        passing atmospheric parameters (i.e., no refraction correction).
+
+    Returns
+    -------
+    (az_deg, el_deg) : tuple of float
+        Azimuth (wrapped to [0, 360)) and elevation in degrees.
+    """
     # --- Ephemerides via Astropy ---
     try:
         from astropy.time import Time
@@ -425,16 +437,27 @@ def compute_ephem(
             "This mode requires Astropy. Please `pip install astropy`."
         ) from e
 
-    loc = EarthLocation(lat=lat_deg * u.deg, lon=lon_deg * u.deg, height=50 * u.m)
-    t = Time(dt_utc, scale="utc")
-    altaz = AltAz(
-        obstime=t,
-        location=loc,
-        pressure=990 * u.hPa,
-        temperature=-5 * u.deg_C,
-        relative_humidity=0.2,
-        obswl=3 * u.mm,
+    loc = EarthLocation(
+        lat=args.site_lat * u.deg,
+        lon=args.site_lon * u.deg,
+        height=args.site_height * u.m,
     )
+    t = Time(dt_utc, scale="utc")
+    if getattr(args, 'enable_refraction', False):
+        altaz = AltAz(
+            obstime=t,
+            location=loc,
+            pressure=args.pressure * u.hPa,
+            temperature=args.temperature * u.deg,
+            humidity=args.humidity,
+            obswl=args.obswl * u.mm,
+        )
+    else:
+        # Default: refraction disabled, build AltAz without atmospheric parameters
+        altaz = AltAz(
+            obstime=t,
+            location=loc,
+        )
     sun = get_sun(t).transform_to(altaz)
     az = (sun.az.to(u.deg).value) % 360.0
     el = sun.alt.to(u.deg).value
@@ -442,12 +465,12 @@ def compute_ephem(
 
 
 def process_map(
-    map_id: str, path_fname: str, sky_fname: str
+    map_id: str, path_fname: str, sky_fname: str, args: argparse.Namespace
 ) -> Optional[Tuple[str, str, float, float, float, float]]:
     """
     Compatibility pipeline for one map_id:
       - segment scans via F0 from .path
-      - for each scan, collect .sky samples in its time window, apply ABS_SIGNAL_MIN
+      - for each scan, collect .sky samples in its time window;
       - compute t_centroid (mean times with power >= 0.75*scan_max)
       - compute central_power (mean power of those samples)
       - keep scans with central_power >= 0.75*MaxCentralPower
@@ -467,20 +490,33 @@ def process_map(
     sky_times = np.array([to_unix_s(r.t_utc) for r in sky_rows], dtype=float)
     sky_vals = np.array([r.signal for r in sky_rows], dtype=float)
 
-    choice = choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals)
+    choice = choose_scan_and_centroid_time(
+        t_path,
+        f0,
+        sky_times,
+        sky_vals,
+        args,
+    )
     if choice is None:
         return None
     (a, b), t_centroid_s, _central_power = choice
 
     # Observed coordinates: NEAREST .path sample
-    az_obs, el_obs = nearest_path_observed(t_centroid_s, t_path, az_path, el_path)
+    az_obs, el_obs = nearest_path_observed(
+        t_centroid_s,
+        t_path,
+        az_path,
+        el_path,
+        args,
+    )
 
     dt_centroid = datetime.fromtimestamp(t_centroid_s, tz=timezone.utc)
-    az_eph, el_eph = compute_ephem(dt_centroid, SITE_LAT_DEG, SITE_LON_DEG)
+    az_eph, el_eph = compute_ephem(dt_centroid, args)
 
-    delta_az = az_obs - az_eph
+
+    delta_az = az_obs - az_eph + args.az_offset_bias
     delta_az = (delta_az + 180.0) % 360.0 - 180.0
-    delta_el = el_obs - el_eph
+    delta_el = el_obs - el_eph + args.el_offset_bias
 
     centroid_iso = dt_centroid.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     return (map_id, centroid_iso, az_obs, el_obs, delta_az, delta_el)
@@ -528,7 +564,227 @@ def append_result_tsv(
     write_offsets_tsv(out_fname, md, record, append=True)
 
 
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description=(
+            "Compute telescope pointing offsets (compat mode). "
+            "Parameters formerly fixed in the script can be set via CLI. "
+            "Atmospheric refraction is disabled by default and can be enabled with "
+            "--enable-refraction."
+        )
+    )
+    p.add_argument(
+        "--site-lon",
+        type=float,
+        default=164.1000,
+        help="Observatory longitude in degrees (default: 164.1000).",
+    )
+    p.add_argument(
+        "--site-lat",
+        type=float,
+        default=-74.6933,
+        help="Observatory latitude in degrees (default: -74.6933).",
+    )
+    p.add_argument(
+        "--site-height",
+        type=float,
+        default=50,
+        help="Observatory altitude in meters (default: 50).",
+    )
+    p.add_argument(
+        "--az-offset-bias",
+        type=float,
+        default=0,
+        help="Azimuth encoder bias in deg (default: 0).",
+    )
+    p.add_argument(
+        "--el-offset-bias",
+        type=float,
+        default=0,
+        help="Elevation encoder bias in deg (default: 0).",
+    )
+    p.add_argument(
+        "--peak-frac",
+        type=float,
+        default=0.75,
+        help=(
+            "Per-scan relative peak threshold for selecting high-signal samples "
+            "(fraction of the scan robust max; default: 0.75)."
+        ),
+    )
+    p.add_argument(
+        "--central-power-frac",
+        type=float,
+        default=0.60,
+        help=(
+            "Fraction of MaxCentralPower to keep scans (default: 0.60). "
+            "Scans with central_power >= this * MaxCentralPower are kept."
+        ),
+    )
+
+    p.add_argument(
+        "--enable-refraction",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable atmospheric refraction in AltAz. When enabled, pressure/"
+            "temperature/humidity/wavelength are taken from the CLI params. "
+            "Default: disabled."
+        ),
+    )
+    p.add_argument(
+        "--pressure",
+        type=float,
+        default=990.0,
+        help=(
+            "Observer pressure in hPa (used only if --enable-refraction; "
+            "default: 990.0)."
+        ),
+    )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=-5.0,
+        help=(
+            "Observer air temperature in °C "
+            "(used only if --enable-refraction; default: -5.0)."
+        ),
+    )
+    p.add_argument(
+        "--humidity",
+        type=float,
+        default=0.2,
+        help=(
+            "Relative humidity as fraction 0..1 "
+            "(used only if --enable-refraction; default: 0.2)."
+        ),
+    )
+    p.add_argument(
+        "--obswl",
+        type=float,
+        default=3.0,
+        help=(
+            "Observing wavelength in mm "
+            "(used only if --enable-refraction; default: 3.0)."
+        ),
+    )
+    return p
+
+
+
+def run(params) -> str:
+    """
+    Execute the algorithm end-to-end using parameters supplied by an external driver.
+
+    Behavior:
+      - If `params.data` is provided, recursively discover valid (.path, .sky) pairs
+        under that directory and process them; otherwise fall back to the module's
+        own discovery (find_map_pairs()).
+      - A "valid" pair is one whose basename does NOT contain 'T<HHMMSS>b' (i.e.,
+        skip files like 250101T195415bOASI.path/.sky). Only keep pairs without 'b'.
+      - Output file location is controlled by `params.outdir`:
+          * If it starts with '/', it is treated as an absolute path.
+          * Otherwise it is relative to the current working directory.
+          * Default is './offsets' (created if missing).
+      - For each valid pair, call process_map(..., params) and append results to TSV.
+      - Return the absolute path of the TSV.
+
+    Returns
+    -------
+    str
+        Absolute path to the TSV written/appended.
+    """
+    import re
+    from pathlib import Path
+
+    # -----------------------------
+    # Resolve output directory
+    # -----------------------------
+    # If params.outdir is not provided or empty, default to "offsets".
+    out_arg = getattr(params, "outdir", None) or "offsets"
+    outdir = Path(out_arg).expanduser()
+    if not outdir.is_absolute():
+        outdir = Path.cwd() / outdir
+    outdir = outdir.resolve()
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Compose final output TSV path: <module_stem>.tsv placed under outdir
+    out_path = outdir / (Path(__file__).stem + ".tsv")
+    out_name = out_path.name
+
+    # -----------------------------
+    # Discovery helpers
+    # -----------------------------
+    def _discover_pairs_recursive(root: Path):
+        """
+        Recursively find (.path, .sky) pairs under `root`, excluding names that
+        contain a 'b' immediately after the time component: 'T\\d{6}b'.
+        Returns a list of tuples: (map_id, path_file, sky_file).
+        """
+        time_b_pat = re.compile(r"T\\d{6}b")  # e.g., 250101T195415bOASI
+        path_files = {}
+        sky_files = {}
+
+        for p in root.rglob("*.path"):
+            name = p.stem
+            if time_b_pat.search(name):
+                continue
+            path_files[name] = p
+
+        for s in root.rglob("*.sky"):
+            name = s.stem
+            if time_b_pat.search(name):
+                continue
+            sky_files[name] = s
+
+        pairs = []
+        for stem in sorted(set(path_files) & set(sky_files)):
+            map_id = stem  # e.g., 250101T195415_OASI
+            pairs.append((map_id, str(path_files[stem]), str(sky_files[stem])))
+        return pairs
+
+    # -----------------------------
+    # Discover pairs
+    # -----------------------------
+    if hasattr(params, "data") and params.data:
+        data_arg = Path(params.data).expanduser()
+        root = data_arg if data_arg.is_absolute() else Path.cwd() / data_arg
+        root = root.resolve()
+        if not root.exists():
+            raise FileNotFoundError(f"--data path not found: {root}")
+        pairs = _discover_pairs_recursive(root)
+    else:
+        # Fallback to the module's original discovery
+        pairs = find_map_pairs()
+
+    if not pairs:
+        print("No valid <map_id>.path / <map_id>.sky pairs found.")
+        return str(out_path)
+
+    # -----------------------------
+    # Process pairs and append results
+    # -----------------------------
+    for map_id, path_fname, sky_fname in pairs:
+        try:
+            res = process_map(map_id, path_fname, sky_fname, params)
+            if res is None:
+                print(f"[WARN] Skipping {map_id}: could not compute offsets.")
+                continue
+            append_result_tsv(str(out_path), res)
+            print(f"[OK] {map_id} -> appended to {out_name}")
+        except Exception as e:
+            print(f"[ERROR] {map_id}: {e}")
+
+    return str(out_path)
+
+
+
+
 def main():
+    # Parse CLI and populate global parameters
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
     script_path = Path(__file__)
     suffix = ".tsv"
     stem = script_path.stem + suffix
@@ -539,7 +795,7 @@ def main():
         return
     for map_id, path_fname, sky_fname in pairs:
         try:
-            res = process_map(map_id, path_fname, sky_fname)
+            res = process_map(map_id, path_fname, sky_fname, args)
             if res is None:
                 print(f"[WARN] Skipping {map_id}: could not compute offsets (compat).")
                 continue
