@@ -1,6 +1,6 @@
-# tests/scripts/test_model_cli.py
+# tests/scripts/test_generate_model.py
 """
-End-to-end and unit tests for `model_cli.py`.
+End-to-end and unit tests for `generate_model.py`.
 
 Scope:
 - `fit`, `predict`, `merge` commands and artifact generation;
@@ -32,23 +32,27 @@ from hypothesis import given, settings, strategies as st
 # Repo root and CLI script resolution (absolute, independent from cwd changes)
 # ----------------------------------------------------------------------------
 
-# tests/scripts/test_model_cli.py -> repo_root = parents[2]
+# tests/scripts/generate_model.py -> repo_root = parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolve_script_module_path() -> Path:
     """
-    Prefer 'scripts/model_cli.py', fallback to 'model_cli.py', both under repo root.
+    Prefer 'scripts/generate_model.py', fallback to 'generate_model.py',
+    both under repo root.
 
     Why: we need an absolute path that does not depend on cwd since tests chdir into
     tmp dirs.
     """
-    candidates = [_REPO_ROOT / "scripts" / "model_cli.py", _REPO_ROOT / "model_cli.py"]
+    candidates = [
+        _REPO_ROOT / "scripts" / "generate_model.py",
+        _REPO_ROOT / "generate_model.py",
+    ]
     for c in candidates:
         if c.exists():
             return c.resolve()
     raise FileNotFoundError(
-        f"Cannot find 'scripts/model_cli.py' nor 'model_cli.py' "
+        f"Cannot find 'scripts/generate_model.py' nor 'generate_model.py' "
         f"under repo root: {_REPO_ROOT}"
     )
 
@@ -58,18 +62,18 @@ _SCRIPT_PATH = _resolve_script_module_path()
 # Import the CLI module by filename (not by package name), so tests can call `main()`.
 import importlib.util as _importlib_util  # noqa: E402
 
-_spec = _importlib_util.spec_from_file_location("model_cli_loaded", _SCRIPT_PATH)
-_model_cli = _importlib_util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec = _importlib_util.spec_from_file_location("generate_model_loaded", _SCRIPT_PATH)
+_generate_model = _importlib_util.module_from_spec(_spec)  # type: ignore[arg-type]
 assert _spec and _spec.loader
-_spec.loader.exec_module(_model_cli)  # type: ignore[assignment]
+_spec.loader.exec_module(_generate_model)  # type: ignore[assignment]
 
 # Canonical symbols under test
-main: Callable[..., int] = _model_cli.main
+main: Callable[..., int] = _generate_model.main
 _resolve_model_path_for_predict: Callable[..., str] = (
-    _model_cli._resolve_model_path_for_predict
+    _generate_model._resolve_model_path_for_predict
 )
-_parse_csv_floats: Callable[..., list[float] | None] = _model_cli._parse_csv_floats
-_resolve_input_tsv: Callable[..., str] = _model_cli._resolve_input_tsv
+_parse_csv_floats: Callable[..., list[float] | None] = _generate_model._parse_csv_floats
+_resolve_input_tsv: Callable[..., str] = _generate_model._resolve_input_tsv
 
 
 # -------------------------------------

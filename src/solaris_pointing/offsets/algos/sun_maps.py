@@ -443,7 +443,7 @@ def compute_ephem(dt_utc: datetime, args: argparse.Namespace) -> Tuple[float, fl
         height=args.site_height * u.m,
     )
     t = Time(dt_utc, scale="utc")
-    if getattr(args, 'enable_refraction', False):
+    if getattr(args, "enable_refraction", False):
         altaz = AltAz(
             obstime=t,
             location=loc,
@@ -512,7 +512,6 @@ def process_map(
 
     dt_centroid = datetime.fromtimestamp(t_centroid_s, tz=timezone.utc)
     az_eph, el_eph = compute_ephem(dt_centroid, args)
-
 
     delta_az = az_obs - az_eph + args.az_offset_bias
     delta_az = (delta_az + 180.0) % 360.0 - 180.0
