@@ -451,3 +451,193 @@ def test_compute_ephem_import_error_branch(monkeypatch, sun_maps):
             ),
         )
     assert "requires Astropy" in str(ex.value)
+
+
+def test_read_path_file_skips_empty_rows(sun_maps, tmp_path):
+    """Ensure read_path_file skips completely empty data rows."""
+    sm, _ = sun_maps
+    p = tmp_path / "path_with_empty.path"
+    p.write_text(
+        "UTC\tAzimuth\tElevation\tF0\n\n2025-01-01T00:00:00.000Z\t10.0\t20.0\t1\n",
+        encoding="utf-8",
+    )
+
+    rows = sm.read_path_file(str(p))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.az_deg == 10.0
+    assert row.el_deg == 20.0
+    assert row.f0 == 1
+
+
+def test_read_sky_file_header_none_and_empty_rows(sun_maps, tmp_path):
+    """Cover header == None branch and empty row branch in read_sky_file."""
+    sm, _ = sun_maps
+    d = tmp_path / "sky_cases"
+    d.mkdir()
+
+    # Case 1: completely empty file -> header is None -> early return
+    empty = d / "empty.sky"
+    empty.write_text("", encoding="utf-8")
+    rows_empty = sm.read_sky_file(str(empty))
+    assert rows_empty == []
+
+    # Case 2: normal header with a completely empty data row
+    with_empty = d / "with_empty.sky"
+    with_empty.write_text(
+        "UTC\tSignal\n\n2025-01-01T00:00:00.000Z\t5.0\n",
+        encoding="utf-8",
+    )
+    rows = sm.read_sky_file(str(with_empty))
+    assert len(rows) == 1
+    assert rows[0].signal == 5.0
+
+
+def test_choose_scan_centroid_denominator_zero_fallback(sun_maps):
+    """
+    Force the defensive branch where denom <= 0 and the centroid falls back
+    to the simple mean of timestamps.
+    """
+    sm, _ = sun_maps
+
+    # Single scan spanning [0, 3]
+    t_path = np.array([0.0, 3.0], dtype=float)
+    f0 = np.array([1, 1], dtype=int)
+
+    # Four samples with symmetric positive/negative values so that
+    # the time-weighted sum of mid_s * dt is zero.
+    sky_times = np.array([0.0, 1.0, 2.0, 3.0], dtype=float)
+    sky_vals = np.array([-3.0, -1.0, 1.0, 3.0], dtype=float)
+
+    # Negative peak_frac ensures all samples are kept, so that denom == 0
+    args = Namespace(peak_frac=-2.0, central_power_frac=0.0)
+
+    out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
+    assert out is not None
+    seg, t_centroid, _cp = out
+    assert seg == (0, 2)
+    # Fallback centroid should be the mean of all timestamps
+    assert t_centroid == pytest.approx(np.mean(sky_times))
+
+
+def test_choose_scan_centroid_none_after_power_filter(sun_maps):
+    """
+    Ensure we hit the branch where scans are found but all are rejected
+    by the central_power_frac threshold (kept list is empty).
+    """
+    sm, _ = sun_maps
+    t_path = np.array([0.0, 1.0], dtype=float)
+    f0 = np.array([1, 1], dtype=int)
+    sky_times = np.array([0.0, 0.5, 1.0], dtype=float)
+    sky_vals = np.array([1.0, 1.0, 1.0], dtype=float)
+
+    # peak_frac = 0 keeps all samples; central_power_frac > 1 forces rejection
+    args = Namespace(peak_frac=0.0, central_power_frac=2.0)
+
+    out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
+    assert out is None
+
+
+def test_choose_scan_centroid_continues_on_degenerate_segment(monkeypatch, sun_maps):
+    """
+    Monkeypatch find_scan_segments to return a degenerate (b <= a) segment
+    and ensure the loop continues without using it.
+    """
+    sm, _ = sun_maps
+
+    def fake_find_scan_segments(f0_array):
+        # A single degenerate segment that should trigger the 'continue'.
+        return [(1, 1)]
+
+    monkeypatch.setattr(sm, "find_scan_segments", fake_find_scan_segments)
+
+    t_path = np.array([0.0, 1.0], dtype=float)
+    f0 = np.array([1, 1], dtype=int)
+    sky_times = np.array([0.0, 0.5, 1.0], dtype=float)
+    sky_vals = np.array([10.0, 20.0, 30.0], dtype=float)
+    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+
+    out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
+    # No valid segments remain, so the function returns None
+    assert out is None
+
+
+def test_choose_scan_centroid_continues_when_sv_slice_empty(sun_maps):
+    """
+    Use a fake sky_vals object so that the slice has size == 0 and the
+    branch `if sv.size == 0: continue` is taken.
+    """
+    sm, _ = sun_maps
+
+    t_path = np.array([0.0, 2.0], dtype=float)
+    f0 = np.array([1, 1], dtype=int)
+    sky_times = np.array([0.5, 1.5], dtype=float)
+
+    class SkyValsFake:
+        def __getitem__(self, _slice):
+            class Slice:
+                # Only 'size' is needed for this branch
+                size = 0
+
+            return Slice()
+
+    sky_vals = SkyValsFake()
+    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+
+    out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
+    assert out is None
+
+
+def test_choose_scan_centroid_skips_nonpositive_scan_max(sun_maps):
+    """
+    Ensure the branch `if scan_max <= 0: continue` is executed by providing
+    non-positive sky values within a valid time window.
+    """
+    sm, _ = sun_maps
+    t_path = np.array([0.0, 2.0], dtype=float)
+    f0 = np.array([1, 1], dtype=int)
+    sky_times = np.array([0.5, 1.5], dtype=float)
+    # All zeros -> percentile is 0.0 -> scan_max <= 0
+    sky_vals = np.array([0.0, 0.0], dtype=float)
+    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+
+    out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
+    assert out is None
+
+
+def test_process_map_returns_none_when_no_rows(sun_maps, tmp_path):
+    """
+    Cover the early return in process_map when either path_rows or sky_rows
+    is empty (here: empty .path file).
+    """
+    sm, written = sun_maps
+    d = tmp_path / "no_rows"
+    d.mkdir()
+
+    empty_path = d / "m.path"
+    empty_path.write_text("", encoding="utf-8")
+
+    sky = d / "m.sky"
+    sky.write_text(
+        "UTC\tSignal\n2025-01-01T00:00:00.000Z\t1.0\n",
+        encoding="utf-8",
+    )
+
+    args = Namespace(
+        peak_frac=0.75,
+        central_power_frac=0.60,
+        az_offset_bias=0.0,
+        el_offset_bias=0.0,
+        site_lat=0.0,
+        site_lon=0.0,
+        site_height=0.0,
+        enable_refraction=False,
+        pressure=990.0,
+        temperature=-5.0,
+        humidity=0.5,
+        obswl=3.0,
+    )
+
+    row = sm.process_map("m", str(empty_path), str(sky), args)
+    assert row is None
+    assert written == []
