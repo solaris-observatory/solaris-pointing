@@ -108,7 +108,6 @@ from typing import Optional
 from pathlib import Path
 from datetime import date as _date
 
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -121,11 +120,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--algo",
-        required=True,
+        required=False,
         help=(
             "Algorithm module name to import from "
             "`solaris_pointing.offsets.algos`. Example: --algo sun_maps"
         ),
+    )
+    p.add_argument(
+        "--examples", action="store_true", help="Show usage examples and exit."
     )
     p.add_argument(
         "--data",
@@ -258,12 +260,97 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def extract_examples_from_docstring() -> str:
+    """
+    Extract the 'Command-line usage examples' section from the module docstring.
+
+    The section begins at the line containing the exact title
+    'Command-line usage examples' and ends at the next separator line,
+    defined as any line containing at least 10 consecutive '-' characters.
+
+    Returns a string containing the title plus the example block.
+    """
+    doc = __doc__ or ""
+    title = "Command-line usage examples"
+
+    # Locate the section header
+    start_idx = doc.find(title)
+    if start_idx == -1:
+        return "No examples available."
+
+    # Extract from the title to the end of the docstring
+    block = doc[start_idx:].splitlines()
+
+    # The first line is the title itself; keep it
+    result_lines = [block[0].strip()]
+
+    # Look for the terminating separator (>= 10 consecutive hyphens)
+    separator_found = False
+    hyphens = "-" * 10
+
+    def wrap_example_line(line: str, width: int = 88) -> list[str]:
+        """
+        Wrap example lines preserving indentation, inserting a trailing backslash,
+        and ensuring lines are only broken before tokens starting with '--'.
+        """
+        stripped = line.lstrip()
+        indent_len = len(line) - len(stripped)
+        indent = " " * indent_len
+
+        tokens = stripped.split()
+        if not tokens:
+            return [line.rstrip()]
+
+        out_lines = []
+        current = indent + tokens[0]
+
+        for tok in tokens[1:]:
+            candidate = current + " " + tok
+
+            if len(candidate) > width:
+                # Can we break here? Only if tok is a switch
+                if tok.startswith("--"):
+                    out_lines.append(current + " \\")
+                    current = indent + tok
+                    continue
+                # Otherwise, add anyway and DO NOT break the line here
+                # (we try to break at the next switch instead)
+                current = candidate
+            else:
+                current = candidate
+
+        out_lines.append(current)
+        return out_lines
+
+    # Skip the title line and process subsequent lines
+    for line in block[2:]:
+        # Stop when encountering a separator line
+        if hyphens in line:
+            separator_found = True
+            break
+        result_lines.extend(wrap_example_line(line))
+
+    title = result_lines[0].strip()
+    body = "\n".join(result_lines[1:]).strip()
+    return title, body
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    if args.examples:
+        title, body = extract_examples_from_docstring()
+        line = "-" * len(title)
+        print(f"\n{line}\n{title}\n{line}\n")
+        print(f"{body}\n")
+        return
+
+    if not args.algo:
+        parser.error("--algo is required unless --examples is provided.")
 
     # Build params Namespace (kept as Namespace for direct compatibility)
     params = SimpleNamespace(
