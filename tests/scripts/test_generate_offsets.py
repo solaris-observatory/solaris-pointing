@@ -332,3 +332,55 @@ def test_no_valid_pairs_message(tmp_path: Path):
     # Should exit cleanly and print the "No valid ..." message
     assert cp.returncode == 0, f"STDERR:\n{cp.stderr}"
     assert "No valid <map_id>.path / <map_id>.sky pairs found." in cp.stdout
+
+
+def test_examples_option_outputs_docstring_section(tmp_path: Path, monkeypatch):
+    """
+    Verify that `--examples` prints the 'Command-line usage examples' section
+    extracted from the module docstring, including the title and at least part
+    of the example body. Also ensure no other required arguments (like --algo)
+    are needed when --examples is supplied.
+    """
+    # Arrange: create fake algorithm so PYTHONPATH is valid
+    _write_fake_algo(tmp_path)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path / "src")
+
+    # Act: run the script with only --examples
+    cp = subprocess.run(
+        [
+            _python_exe(),
+            str(_script_path()),
+            "--examples",
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+    # Assert: clean exit
+    assert cp.returncode == 0, f"STDERR:\n{cp.stderr}"
+
+    out = cp.stdout
+
+    title = "Command-line usage examples"
+
+    # 1) Output must contain the title
+    assert title in out, "Output must include the examples title"
+
+    # 2) Output must contain at least one example command
+    assert "python" in out, "Output should contain example commands"
+
+    # 3) Output must include a separator of >= 10 hyphens
+    assert any(("-" * 10) in line for line in out.splitlines()), (
+        "Output should contain a hyphen delimiter"
+    )
+
+    # 4) Output should contain at least one CLI switch
+    assert "--data" in out or "--algo" in out, (
+        "Example body should include CLI switches"
+    )

@@ -23,8 +23,6 @@ merge     Merge per-axis models into a unified <stem>.joblib bundle.
 -------------------------------------------------------------------------------
 Command-line usage examples
 -------------------------------------------------------------------------------
-# --- FIT --------------------------------------------------------------------
-
 1) Minimal fit (both AZ and EL, default parameters):
    python scripts/model_cli.py fit mydata.tsv
    # Outputs: models/mydata_az.joblib, models/mydata_el.joblib,
@@ -51,8 +49,6 @@ Command-line usage examples
 6) Fit with input offsets in arcseconds:
    python scripts/model_cli.py fit data.tsv --input-offset-unit arcsec
 
-# --- PREDICT ---------------------------------------------------------------
-
 7) Predict both axes (no selector flags):
    python scripts/model_cli.py predict alpacino --azimuth 12.0 --unit arcsec
    # Loads: models/alpacino_az.joblib and models/alpacino_el.joblib
@@ -68,8 +64,6 @@ Command-line usage examples
 10) Predict with extrapolation beyond observed azimuth range:
     python scripts/model_cli.py predict alpacino --az \
         --azimuth 355.0 --allow-extrapolation
-
-# --- MERGE -----------------------------------------------------------------
 
 11) Merge existing per-axis models into a unified bundle:
     python scripts/model_cli.py merge alpacino
@@ -1108,6 +1102,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Pointing model CLI with per-axis selection and unified params",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+
     sub = p.add_subparsers(dest="command", required=True)
 
     # fit
@@ -1216,9 +1211,98 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> int:
+def extract_examples_from_docstring() -> tuple[str, str]:
+    """
+    Extract the 'Command-line usage examples' section from this module's docstring.
+
+    The section begins at the line containing the exact title
+    'Command-line usage examples' and ends at the next separator line,
+    defined as any line containing >= 10 consecutive '-' characters.
+
+    Returns (title, body) where:
+    - title is the title line itself
+    - body is the wrapped block of example lines
+    """
+    doc = __doc__ or ""
+    title = "Command-line usage examples"
+
+    start_idx = doc.find(title)
+    if start_idx == -1:
+        return "Command-line usage examples", "No examples available."
+
+    # Extract block starting from title
+    block = doc[start_idx:].splitlines()
+    result_lines = [block[0].strip()]
+
+    # Look for the terminating separator (>= 10 consecutive hyphens)
+    separator_found = False
+    hyphens = "-" * 10
+
+    def wrap_example_line(line: str, width: int = 88) -> list[str]:
+        """
+        Wrap long example lines, inserting a trailing backslash, and only
+        breaking at tokens starting with '--'. Indentation is preserved.
+        """
+        stripped = line.lstrip()
+        indent_len = len(line) - len(stripped)
+        indent = " " * indent_len
+
+        tokens = stripped.split()
+        if not tokens:
+            return [line.rstrip()]
+
+        out_lines = []
+        current = indent + tokens[0]
+
+        for tok in tokens[1:]:
+            candidate = current + " " + tok
+
+            if len(candidate) > width:
+                if tok.startswith("--"):
+                    out_lines.append(current + " \\")
+                    current = indent + tok
+                    continue
+                current = candidate
+            else:
+                current = candidate
+
+        out_lines.append(current)
+        return out_lines
+
+    # Process example lines until separator
+    for line in block[2:]:
+        if hyphens in line:
+            separator_found = True
+            break
+        result_lines.extend(wrap_example_line(line))
+
+    title = result_lines[0].strip()
+    body = "\n".join(result_lines[1:]).strip()
+    return title, body
+
+
+def main(argv=None):
+    # ------------------------------------------------------------
+    # Phase 1: lightweight pre-parser (no subcommands)
+    # ------------------------------------------------------------
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--examples", action="store_true")
+    args_pre, _ = pre.parse_known_args(argv)
+
+    # If --examples is present, show them and exit BEFORE subcommands exist
+    if args_pre.examples:
+        title, body = extract_examples_from_docstring()
+        line = "-" * len(title)
+        print(f"\n{line}\n{title}\n{line}\n")
+        print(body + "\n")
+        return 0
+
+    # ------------------------------------------------------------
+    # Phase 2: full parser (with subcommands)
+    # ------------------------------------------------------------
     parser = build_parser()
     args = parser.parse_args(argv)
+
     return args.func(args)
 
 

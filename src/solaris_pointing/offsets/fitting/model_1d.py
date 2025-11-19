@@ -655,7 +655,10 @@ def fit_models_from_tsv(
         sector_edges_deg=list(sector_edges_deg or []),
         az_lin_min_deg=az_lin_min,
         az_lin_max_deg=az_lin_max,
-        timestamp_utc=datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        timestamp_utc=datetime.datetime.now(datetime.UTC)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
         data_hash=_sha256_of_file_strip_comments(path),
         source_path=str(path),
         library_version="az_model 1.0.0",

@@ -38,3 +38,7 @@ sphinx-rtd-theme = "^3.0.2"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+generate_offsets = "scripts.generate_offsets:main"
+generate_model = "scripts.generate_model:main"
