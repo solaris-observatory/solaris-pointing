@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Fit, predict and merge pointing-offset models (per-axis or unified).
+"""
+Fit, predict, and merge pointing-offset models (per-axis or unified).
 
 This CLI provides a uniform interface to fit, predict, and merge telescope
-pointing-offset models from TSV data files or serialized bundles (.joblib).
-It supports independent per-axis models (AZ / EL) and automatically produces
-a unified bundle combining both when available.
+pointing-offset models from TSV input files or serialized bundles (.joblib).
+It supports per-axis fits (AZ / EL) as well as unified bundles combining both
+axes. The backend is model-agnostic: the default is ``model_1d`` but any module
+``model_<kind>`` implementing the required API may be selected with --model.
 
-The tool is backend-agnostic (default backend: ``model_1d``). Each fitted model
-creates:
-- a .joblib model bundle for AZ and/or EL,
-- a PNG plot for each axis,
-- a human-readable text summary including a ready-to-copy Python function,
-- and a JSON metadata sidecar (.meta.json).
+The command accepts three subcommands:
+- **fit**:     Train AZ/EL models from TSV data files and write all artifacts.
+- **predict**: Predict AZ/EL offsets at a given azimuth using saved bundles.
+- **merge**:   Merge per-axis bundles into a unified <stem>.joblib bundle.
+
+The option **--examples** prints the “Command-line usage examples” section from
+this docstring and exits immediately, without requiring a subcommand.
 
 -------------------------------------------------------------------------------
 Available subcommands
@@ -23,73 +26,87 @@ merge     Merge per-axis models into a unified <stem>.joblib bundle.
 -------------------------------------------------------------------------------
 Command-line usage examples
 -------------------------------------------------------------------------------
-1) Minimal fit (both AZ and EL, default parameters):
-   python scripts/model_cli.py fit mydata.tsv
-   # Outputs: models/mydata_az.joblib, models/mydata_el.joblib,
-   #          plots and summaries per axis,
-   #          plus models/mydata.joblib (unified bundle).
+1) Minimal fit (both AZ and EL, using default parameters):
+   python scripts/generate_model.py fit data.tsv
+   # Outputs: models/data_az.joblib, models/data_el.joblib,
+   #          per-axis plots, per-axis summaries,
+   #          and models/data.joblib (unified bundle).
 
-2) Fit both axes with custom parameters:
-   python scripts/model_cli.py fit alpacino.tsv \
+2) Fit with custom polynomial/Fourier parameters:
+   python scripts/generate_model.py fit scans.tsv \
        --degree 3 --zscore 2.5 --fourier-k 2 --plot-unit arcmin
 
-3) Fit AZ only:
-   python scripts/model_cli.py fit alpacino.tsv --az \
-       --degree 3 --zscore 2.5 --fourier-k 2
+3) Fit only the AZ axis:
+   python scripts/generate_model.py fit input.tsv --az \
+       --degree 3 --fourier-k 1
 
-4) Fit EL only:
-   python scripts/model_cli.py fit alpacino.tsv --el \
-       --degree 3 --zscore 2.5 --fourier-k 1 --periods-deg 90,45
+4) Fit only the EL axis:
+   python scripts/generate_model.py fit input.tsv --el \
+       --degree 3 --fourier-k 1
 
-5) Fit multiple TSV files (combined plots are generated automatically):
-   python scripts/model_cli.py fit new.tsv oranges.tsv \
-       --degree 2 --zscore 2.0 --plot-unit arcmin
-   # Produces combined plots: models/new+oranges_az.png and _el.png
+5) Fit multiple TSV files (plots automatically combined):
+   python scripts/generate_model.py fit a.tsv b.tsv \
+       --degree 2 --zscore 2.0
 
-6) Fit with input offsets in arcseconds:
-   python scripts/model_cli.py fit data.tsv --input-offset-unit arcsec
+6) Fit when input offsets are expressed in arcseconds:
+   python scripts/generate_model.py fit offsets.tsv --input-offset-unit arcsec
 
-7) Predict both axes (no selector flags):
-   python scripts/model_cli.py predict alpacino --azimuth 12.0 --unit arcsec
-   # Loads: models/alpacino_az.joblib and models/alpacino_el.joblib
+7) Predict using both AZ and EL models:
+   python scripts/generate_model.py predict data --azimuth 12.0 --unit arcsec
+   # Searches: models/data_az.joblib and models/data_el.joblib
 
-8) Predict AZ only:
-   python scripts/model_cli.py predict alpacino --az \
-       --azimuth 12.0 --unit arcsec
+8) Predict using only the AZ model:
+   python scripts/generate_model.py predict data --az \
+       --azimuth 45.0 --unit arcmin
 
-9) Predict EL only:
-   python scripts/model_cli.py predict models/alpacino_el.joblib --el \
-       --azimuth 12.0 --unit arcmin
+9) Predict using only the EL model:
+   python scripts/generate_model.py predict data --el \
+       --azimuth 45.0 --unit arcmin
 
-10) Predict with extrapolation beyond observed azimuth range:
-    python scripts/model_cli.py predict alpacino --az \
+10) Predict while allowing evaluation beyond the observed azimuth range:
+    python scripts/generate_model.py predict data --az \
         --azimuth 355.0 --allow-extrapolation
 
-11) Merge existing per-axis models into a unified bundle:
-    python scripts/model_cli.py merge alpacino
-    # Reads:  models/alpacino_az.joblib and models/alpacino_el.joblib
-    # Writes: models/alpacino.joblib (+ metadata sidecar .meta.json)
+11) Merge two per-axis models into a unified bundle:
+    python scripts/generate_model.py merge data
+    # Reads:  models/data_az.joblib and models/data_el.joblib
+    # Writes: models/data.joblib (+ metadata sidecar)
+
+12) Show only this example block and exit:
+    python scripts/generate_model.py --examples
 
 -------------------------------------------------------------------------------
 Input / output conventions
 -------------------------------------------------------------------------------
-- TSV inputs are looked up under ``offsets/`` if no directory is given.
-- Models, plots, and summaries are written under ``models/``.
-- Summaries include: text statistics, MAD_t/MAD_i in chosen unit,
-  and a **Python function** defining the offset model.
+- TSV data for fitting: loaded from the given paths, or from ``offsets/`` when
+  a bare file name is used.
+- Output directory for models, summaries, and plots: ``models/``.
+- Each saved bundle also writes a metadata sidecar ``.meta.json`` recording
+  the backend kind.
+- Summaries include polynomial/Fourier parameters, MAD statistics, and a ready-to-copy
+  Python function implementing the fitted offset model.
 
 -------------------------------------------------------------------------------
-Unified parameters (shared by both axes)
+Unified parameters (shared for AZ and EL fits)
 -------------------------------------------------------------------------------
 --degree (int)                  Polynomial degree.
---zscore (float)                Robust outlier threshold (MAD-based).
---ridge-alpha (float)           L2 regularization factor.
+--zscore (float)                MAD-based outlier threshold.
+--ridge-alpha (float)           L2 regularization strength.
 --fourier-k (int)               Number of Fourier harmonics (0 disables).
---periods-deg (list[str])       Custom Fourier periods, e.g. "6,11.25".
---sector-edges-deg (list[str])  Sector edges in degrees, e.g. "60,210".
---input-offset-unit (str)       Input unit of offsets (deg|arcmin|arcsec).
---plot-unit (str)               Y-axis unit in saved plots (deg|arcmin|arcsec).
---notes (str)                   Free text stored in metadata for traceability.
+--periods-deg (list[str])       Custom Fourier periods (comma-separated).
+--sector-edges-deg (list[str])  Sector boundaries for piecewise fitting.
+--input-offset-unit (str)       Input offset unit in TSV (deg|arcmin|arcsec).
+--plot-unit (str)               Unit for plots and summary residuals.
+
+-------------------------------------------------------------------------------
+Notes
+-------------------------------------------------------------------------------
+- The ``--model <kind>`` option allows selecting any backend implementing the
+  required API (model_<kind>). Fitted bundles remember their backend via the
+  sidecar JSON and are automatically loaded with the correct module.
+- ``--examples`` is processed before any subcommand, discovery, or computation.
+- Unified bundles follow the same format as the backend’s native bundles and
+  remain backward compatible with legacy model_1d files.
 """
 
 from __future__ import annotations

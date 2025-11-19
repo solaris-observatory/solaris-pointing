@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 """
-Discover Sun scan pairs (.path/.sky), compute pointing offsets, write a TSV.
+Discover Sun scan pairs (.path/.sky), compute pointing offsets, and write a TSV.
 
 This CLI is a thin driver around algorithms in
 `solaris_pointing.offsets.algos.<algo>`. It discovers valid map pairs
-(recursive under --data), imports the selected algorithm, and calls its
-public API to compute and append results to a single TSV file.
+(recursively under --data), imports the selected algorithm, and calls its public
+API to compute and append results to a single TSV file.
 
-The default behavior (no date filters) matches current `sun_maps`. You can
-optionally restrict processing to a date range (inclusive) parsed from each
-map stem (format `YYMMDDTHHMMSS...`, years 2000–2099).
+The default behavior (no date filters) matches current `sun_maps`. Optional
+filters restrict maps to a date range inferred from the stem prefix
+`YYMMDDTHHMMSS...` (years 2000–2099). Additional options allow enabling
+refraction, passing site parameters, and applying fixed biases to the computed
+offsets.
 
 -------------------------------------------------------------------------------
 Key features
 -------------------------------------------------------------------------------
 - Recursively discover <stem>.path and <stem>.sky under --data.
-- Exclude stems that contain 'T<HHMMSS>b' (e.g., 250101T210109bOASI).
+- Exclude stems that match the pattern 'T<HHMMSS>b' (e.g. 250101T210109bOASI).
 - Optional inclusive date filters: --date-start / --date-end.
-- Pass-through site/refraction params for AltAz construction (when enabled).
+- Pass-through site/refraction parameters for AltAz construction (when enabled).
 - Append all results to a single TSV named <algo>.tsv under --outdir.
 - Progress line per map: `[OK] MM/N: <map_id> -> appended to <algo>.tsv`.
+- Display the docstring usage examples with `--examples`.
 
 -------------------------------------------------------------------------------
 Input / output conventions
 -------------------------------------------------------------------------------
 - Input directory: provided via --data (searched recursively).
-- Valid pair: both `<stem>.path` and `<stem>.sky` exist and do not match
+- Valid pair: `<stem>.path` and `<stem>.sky` exist and do not match
   the exclusion rule `T\\d{6}b`.
 - Output TSV path: `<outdir>/<algo>.tsv` (directory is created if missing).
+- When `--examples` is provided, no discovery or computation occurs; the script
+  simply prints the example block extracted from this docstring and exits.
 
 -------------------------------------------------------------------------------
 Command-line usage examples
@@ -60,42 +65,43 @@ Command-line usage examples
    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
        --outdir offsets_run_42
 
+8) Show only this example block and exit:
+   python scripts/generate_offsets.py --examples
+
 -------------------------------------------------------------------------------
 Parameters (selected)
 -------------------------------------------------------------------------------
---algo (str, required)        Algorithm module under
+--algo (str)                  Algorithm module under
                               `solaris_pointing.offsets.algos`, e.g. sun_maps.
+--examples                    Print the “Command-line usage examples” section
+                              from this docstring and exit.
 --data (str)                  Root directory for discovery (recursive).
 --outdir (str)                Directory for the output TSV (default: ./offsets).
 
---date-start (YYYY-MM-DD)     Inclusive start date. If provided alone, include
-                              all maps on/after this date.
---date-end   (YYYY-MM-DD)     Inclusive end date. If provided alone, include
-                              all maps on/before this date.
-                              If both are provided: keep maps in [start, end].
+--date-start (YYYY-MM-DD)     Inclusive start date for filtering.
+--date-end   (YYYY-MM-DD)     Inclusive end date for filtering.
 
---site-lon/--site-lat         Observatory coordinates (degrees).
---site-height (m)             Observatory height above sea level (meters).
---enable-refraction           Enable AltAz refraction using the meteo params.
---pressure (hPa)              Used only when --enable-refraction is set.
---temperature (°C)            Used only when --enable-refraction is set.
---humidity (0..1)             Used only when --enable-refraction is set.
---obswl (mm)                  Observing wavelength, used with refraction.
+--site-lon / --site-lat       Observatory coordinates (degrees).
+--site-height (m)             Observatory altitude.
+--enable-refraction           Enable atmospheric refraction.
+--pressure / --temperature    Meteo parameters (used only with refraction).
+--humidity (0..1)             Relative humidity (fraction).
+--obswl (mm)                  Observing wavelength.
 
---az-offset-bias (deg)        Additive bias applied to delta_az (degrees).
---el-offset-bias (deg)        Additive bias applied to delta_el (degrees).
+--az-offset-bias (deg)        Additive bias for delta_az.
+--el-offset-bias (deg)        Additive bias for delta_el.
 --peak-frac (0..1]            Threshold for scan peak selection.
---central-power-frac (0..1]   Fraction of MaxCentralPower to keep scans.
+--central-power-frac (0..1]   Threshold for central power selection.
 
 -------------------------------------------------------------------------------
 Notes
 -------------------------------------------------------------------------------
-- Date parsing is based on the stem prefix `YYMMDDTHHMMSS...`. Stems without
-  a valid timestamp are processed only when no date filter is requested.
+- Date parsing is based on the stem prefix `YYMMDDTHHMMSS...`. Stems without a
+  valid timestamp are processed only when no date filter is requested.
 - Excluded stems (rule `T\\d{6}b`) are never processed.
-- The TSV is appended incrementally; each `[OK]` line signals a successful
+- Results are appended incrementally; each `[OK]` line indicates a successful
   append for the current map.
-
+- The `--examples` option is processed before any discovery or computation.
 """
 
 from __future__ import annotations
