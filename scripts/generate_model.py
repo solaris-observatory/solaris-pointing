@@ -13,8 +13,8 @@ The command accepts three subcommands:
 - **predict**: Predict AZ/EL offsets at a given azimuth using saved bundles.
 - **merge**:   Merge per-axis bundles into a unified <stem>.joblib bundle.
 
-The option **--examples** prints the “Command-line usage examples” section from
-this docstring and exits immediately, without requiring a subcommand.
+The option **--examples** prints some usage examples and exits immediately,
+without requiring a subcommand.
 
 -------------------------------------------------------------------------------
 Available subcommands
