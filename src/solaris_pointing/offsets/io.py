@@ -232,7 +232,7 @@ class Measurement:
 
 def _write_metadata_block(f: TextIO, md: Metadata) -> None:
     """Write the commented metadata block."""
-    metadata_title = "# === Metadata " + 70*"=" + "\n"
+    metadata_title = "# === Metadata " + 70 * "=" + "\n"
     f.write(metadata_title)
 
     # ---------------------------
@@ -307,7 +307,7 @@ def _write_metadata_block(f: TextIO, md: Metadata) -> None:
         f.write(f"#  Config file: {md.config_file}\n")
     if md.created_at_iso:
         f.write(f"#  Created at (UTC): {md.created_at_iso}\n")
-    f.write("# " + (len(metadata_title) -2)*"=" + "\n")
+    f.write("# " + (len(metadata_title) - 2) * "=" + "\n")
 
 
 def _expected_columns() -> List[str]:
@@ -450,7 +450,7 @@ if __name__ == "__main__":
         site_location="Mario Zucchelli Station, Antarctica",
         antenna_diameter_m=1.2,
         frequency_ghz=100,
-        software_version="1.4.0",
+        software_url="https://...",
     )
     demo = [
         Measurement(

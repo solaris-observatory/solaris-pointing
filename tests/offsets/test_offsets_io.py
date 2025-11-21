@@ -13,10 +13,10 @@ def test_metadata_created_iso_or_now(monkeypatch):
     # Explicit timestamp path
     ts = "2025-01-01T00:00:00Z"
     md = io.Metadata(
-        location="X",
+        site_location="X",
         antenna_diameter_m=1.0,
         frequency_ghz=100.0,
-        software_version="1.0",
+        software_url="https://...",
         created_at_iso=ts,
     )
     assert md.created_iso_or_now() == ts
@@ -30,10 +30,10 @@ def test_metadata_created_iso_or_now(monkeypatch):
 
     monkeypatch.setattr(io, "datetime", DummyDT)
     md2 = io.Metadata(
-        location="Y",
+        site_location="Y",
         antenna_diameter_m=2.0,
         frequency_ghz=90.0,
-        software_version="2.0",
+        software_url="https://...",
         created_at_iso=None,
     )
     assert md2.created_iso_or_now() == "2025-01-02T03:04:05Z"
@@ -137,10 +137,10 @@ def test_read_header_tokens_no_header_raises(tmp_path: Path):
 
 def _make_demo_md():
     return io.Metadata(
-        location="Mario Zucchelli Station, Antarctica",
+        site_location="Mario Zucchelli Station, Antarctica",
         antenna_diameter_m=1.2,
         frequency_ghz=100,
-        software_version="1.4.0",
+        software_url="https://...",
         created_at_iso="2025-01-03T00:00:00Z",
     )
 
@@ -245,10 +245,10 @@ def test_overwrite_cleanup_unlink_ok(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(io, "_write_column_header", boom)
 
     md = io.Metadata(
-        location="X",
+        site_location="X",
         antenna_diameter_m=1.0,
         frequency_ghz=100.0,
-        software_version="1.0",
+        software_url="https://...",
     )
 
     with pytest.raises(RuntimeError, match="force failure"):
@@ -288,7 +288,10 @@ def test_overwrite_cleanup_unlink_oserror(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "unlink", fake_unlink)
 
     md = io.Metadata(
-        location="Y", antenna_diameter_m=2.0, frequency_ghz=90.0, software_version="2.0"
+        site_location="Y",
+        antenna_diameter_m=2.0,
+        frequency_ghz=90.0,
+        software_url="https://...",
     )
 
     with pytest.raises(RuntimeError, match="force failure"):
@@ -297,3 +300,86 @@ def test_overwrite_cleanup_unlink_oserror(tmp_path: Path, monkeypatch):
     # Because unlink raised OSError, the except branch swallowed it
     # and the tmp still exists
     assert tmp.exists()
+
+
+def test_write_metadata_block_full_coverage():
+    from io import StringIO
+    import solaris_pointing.offsets.io as io_mod
+
+    md = io_mod.Metadata(
+        # Site info
+        site_location="Antarctica",
+        site_code="MZS",
+        data_code="OASI",
+        site_lat=-74.7,
+        site_lon=164.1,
+        site_height=25.0,
+        # Telescope
+        antenna_diameter_m=1.2,
+        frequency_ghz=100.0,
+        # Algorithm
+        algo="sun_maps",
+        az_offset_bias=0.12,
+        el_offset_bias=-0.34,
+        refraction="enabled",
+        pressure_hpa=990.0,
+        temperature_c=-5.0,
+        humidity_frac=0.45,
+        obswl_mm=3.0,
+        peak_frac=0.75,
+        central_power_frac=0.60,
+        # Software info
+        software_url="https://repo",
+        software_commit="abc123",
+        # Run info
+        config_file="/path/to/config.toml",
+        created_at_iso="2025-02-01T12:34:56Z",
+    )
+
+    buf = StringIO()
+    io_mod._write_metadata_block(buf, md)
+    txt = buf.getvalue()
+    lines = txt.splitlines()
+
+    # Title line
+    assert lines[0].startswith("# === Metadata")
+
+    # SITE
+    assert "# [Site]" in txt
+    assert "#  Location: Antarctica" in txt
+    assert "#  Code: MZS" in txt
+    assert "#  Code from data: OASI" in txt
+    assert "#  Latitude (deg): -74.7" in txt
+    assert "#  Longitude (deg): 164.1" in txt
+    assert "#  Height (m): 25.0" in txt
+
+    # TELESCOPE
+    assert "# [Telescope]" in txt
+    assert "#   Diameter (m)    : 1.2" in txt
+    assert "#   Frequency (GHz) : 100.0" in txt
+
+    # ALGORITHM
+    assert "# [Algorithm]" in txt
+    assert "#  Name: sun_maps" in txt
+    assert "#  AZ offset bias (deg): 0.12" in txt
+    assert "#  EL offset bias (deg): -0.34" in txt
+    assert "#  Refraction: enabled" in txt
+    assert "#  Pressure (hPa): 990.0" in txt
+    assert "#  Temperature (C): -5.0" in txt
+    assert "#  Humidity (frac): 0.45" in txt
+    assert "#  Wavelength (mm): 3.0" in txt
+    assert "#  Peak fraction: 0.75" in txt
+    assert "#  Central power frac: 0.6" in txt
+
+    # SOFTWARE
+    assert "# [Software]" in txt
+    assert "#  Repository: https://repo" in txt
+    assert "#  Commit SHA: abc123" in txt
+
+    # RUN
+    assert "# [Run]" in txt
+    assert "#  Config file: /path/to/config.toml" in txt
+    assert "#  Created at (UTC): 2025-02-01T12:34:56Z" in txt
+
+    # Trailer
+    assert lines[-1].startswith("# ==")

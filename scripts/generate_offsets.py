@@ -341,7 +341,7 @@ def extract_examples_from_docstring() -> str:
     'Command-line usage examples' and ends at the next separator line,
     defined as any line containing at least 10 consecutive '-' characters.
 
-    Returns a string containing the title plus the example block.
+    Returns a tuple (title, body)
     """
     doc = __doc__ or ""
     title = "Command-line usage examples"

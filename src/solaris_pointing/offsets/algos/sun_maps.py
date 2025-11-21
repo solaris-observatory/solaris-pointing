@@ -167,10 +167,13 @@ from solaris_pointing.offsets.io import (
 
 def _get_git_commit():
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
     except Exception:
         return "unknown"
 
@@ -541,6 +544,28 @@ def process_map(
 def append_result_tsv(
     out_fname: str, row: Tuple[str, str, float, float, float, float], params=None
 ) -> None:
+    if params is None:
+        params = argparse.Namespace(
+            site_location=None,
+            site_code=None,
+            data_code=None,
+            site_lat=None,
+            site_lon=None,
+            site_height=None,
+            diameter=None,
+            frequency=None,
+            az_offset_bias=None,
+            el_offset_bias=None,
+            enable_refraction=False,
+            pressure=None,
+            temperature=None,
+            humidity=None,
+            obswl=None,
+            peak_frac=None,
+            central_power_frac=None,
+            algo=None,
+            config=None,
+        )
     commit = _get_git_commit()
     short = commit[:8] if commit != "unknown" else "unknown"
     software_url = (
@@ -556,29 +581,24 @@ def append_result_tsv(
         site_height=params.site_height,
         antenna_diameter_m=params.diameter,
         frequency_ghz=params.frequency,
-
         az_offset_bias=params.az_offset_bias,
         el_offset_bias=params.el_offset_bias,
         refraction=("enabled" if params.enable_refraction else "disabled"),
         algo=params.algo,
-
         # Atmospheric parameters
         pressure_hpa=params.pressure,
         temperature_c=params.temperature,
         humidity_frac=params.humidity,
         obswl_mm=params.obswl,
-
         # Algorithm thresholds
         peak_frac=params.peak_frac,
         central_power_frac=params.central_power_frac,
-
         # Provenance
         software_url=software_url,
         software_commit=commit,
         config_file=(params.config if hasattr(params, "config") else None),
         created_at_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
-
 
     map_id, timestamp, az, el, offset_az, offset_el = row
     record = [

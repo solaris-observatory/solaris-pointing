@@ -385,9 +385,9 @@ def _write_unified_bundle_and_summary(
             tsv_content = ff.read()
 
         with open(unified_summary, "a", encoding="utf-8") as f:
-            f.write("\n\n" + 85*"*")
+            f.write("\n\n" + 85 * "*")
             f.write("\nOffsets file content (Input)")
-            f.write("\n" + 85*"*" + "\n\n")
+            f.write("\n" + 85 * "*" + "\n\n")
             f.write(tsv_content)
 
     except Exception as e:

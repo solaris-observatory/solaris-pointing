@@ -42,7 +42,7 @@ def _write_fake_algo(root: Path, missing: str | None = None) -> None:
 
     - process_map(map_id, path_fname, sky_fname, params) returns a dict with id,
       or None to simulate a skip if "SKIP" is in map_id.
-    - append_result_tsv(out_path, res) appends one line per result.
+    - append_result_tsv(out_path, res, params) appends one line per result.
     - If `missing` is "append", omit append_result_tsv to trigger the error.
     """
     pkg = root / "src" / "solaris_pointing" / "offsets" / "algos"
@@ -64,7 +64,7 @@ def _write_fake_algo(root: Path, missing: str | None = None) -> None:
     ]
     if missing != "append":
         code += [
-            "def append_result_tsv(out_path, res):",
+            "def append_result_tsv(out_path, res, params=None):",
             "    with open(out_path, 'a', encoding='utf-8') as f:",
             "        f.write(res['id'] + '\\n')",
             "",

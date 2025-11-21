@@ -57,6 +57,7 @@ def _install_fake_astropy():
         m = "m"
         hPa = "hPa"
         mm = "mm"
+        deg_C = "deg_C"
 
     u = U
 
@@ -126,6 +127,7 @@ def _install_fake_astropy():
     units_mod.hPa = 1.0
     units_mod.mm = 1.0
     units_mod.u = u
+    units_mod.deg_C = 1.0
 
     sys.modules["astropy"] = astropy_mod
     sys.modules["astropy.coordinates"] = coords
@@ -207,7 +209,7 @@ def test_parse_and_readers_and_segments_and_wrap_and_nearest(sun_maps, tmp_path)
 
 def test_choose_scan_centroid_branching(sun_maps):
     sm, _ = sun_maps
-    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+    args = Namespace(site_location="Foo", peak_frac=0.75, central_power_frac=0.60)
 
     # No segments -> None
     t_path = np.array([0.0, 1.0, 2.0], dtype=float)
@@ -255,6 +257,7 @@ def test_compute_ephem_on_off(sun_maps):
     dt = datetime(2025, 1, 1, tzinfo=timezone.utc)
     # OFF
     args_off = Namespace(
+        site_location="Antarctica",
         site_lat=0.0,
         site_lon=0.0,
         site_height=0.0,
@@ -268,6 +271,7 @@ def test_compute_ephem_on_off(sun_maps):
     assert 0 <= az < 360 and -90 <= el <= 90
     # ON (branch with refraction params)
     args_on = Namespace(
+        site_location="Foo",
         site_lat=1.0,
         site_lon=2.0,
         site_height=3.0,
@@ -316,6 +320,7 @@ def test_readers_and_process_and_append(sun_maps, tmp_path):
     _write_sky_file(data / "map.sky", sky_rows)
 
     args = Namespace(
+        site_location="Antarctica",
         peak_frac=0.75,
         central_power_frac=0.60,
         az_offset_bias=0.10,
@@ -383,7 +388,7 @@ def test_choose_scan_centroid_none_when_no_keep(sun_maps):
     f0 = np.array([1, 1, 0, 1, 0], dtype=int)
     sky_times = np.array([0.2, 0.8, 10.4], dtype=float)
     sky_vals = np.array([0.1, 0.2, 0.05], dtype=float)
-    args = Namespace(peak_frac=1.1, central_power_frac=0.95)
+    args = Namespace(site_location="Foo", peak_frac=1.1, central_power_frac=0.95)
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     assert out is None
 
@@ -406,6 +411,7 @@ def test_process_map_returns_none_when_no_centroid(sun_maps, tmp_path):
         encoding="utf-8",
     )
     args = Namespace(
+        site_location="Antarctica",
         peak_frac=1.1,  # forza no-keep
         central_power_frac=0.95,
         az_offset_bias=0.0,
@@ -440,6 +446,7 @@ def test_compute_ephem_import_error_branch(monkeypatch, sun_maps):
         sm.compute_ephem(
             datetime(2025, 1, 1, tzinfo=timezone.utc),
             Namespace(
+                site_location="Antarctica",
                 site_lat=0.0,
                 site_lon=0.0,
                 site_height=0.0,
@@ -510,7 +517,7 @@ def test_choose_scan_centroid_denominator_zero_fallback(sun_maps):
     sky_vals = np.array([-3.0, -1.0, 1.0, 3.0], dtype=float)
 
     # Negative peak_frac ensures all samples are kept, so that denom == 0
-    args = Namespace(peak_frac=-2.0, central_power_frac=0.0)
+    args = Namespace(site_location="Foo", peak_frac=-2.0, central_power_frac=0.0)
 
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     assert out is not None
@@ -532,7 +539,7 @@ def test_choose_scan_centroid_none_after_power_filter(sun_maps):
     sky_vals = np.array([1.0, 1.0, 1.0], dtype=float)
 
     # peak_frac = 0 keeps all samples; central_power_frac > 1 forces rejection
-    args = Namespace(peak_frac=0.0, central_power_frac=2.0)
+    args = Namespace(site_location="Foo", peak_frac=0.0, central_power_frac=2.0)
 
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     assert out is None
@@ -555,7 +562,7 @@ def test_choose_scan_centroid_continues_on_degenerate_segment(monkeypatch, sun_m
     f0 = np.array([1, 1], dtype=int)
     sky_times = np.array([0.0, 0.5, 1.0], dtype=float)
     sky_vals = np.array([10.0, 20.0, 30.0], dtype=float)
-    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+    args = Namespace(site_location="Foo", peak_frac=0.75, central_power_frac=0.60)
 
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     # No valid segments remain, so the function returns None
@@ -582,7 +589,7 @@ def test_choose_scan_centroid_continues_when_sv_slice_empty(sun_maps):
             return Slice()
 
     sky_vals = SkyValsFake()
-    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+    args = Namespace(site_location="Foo", peak_frac=0.75, central_power_frac=0.60)
 
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     assert out is None
@@ -599,7 +606,7 @@ def test_choose_scan_centroid_skips_nonpositive_scan_max(sun_maps):
     sky_times = np.array([0.5, 1.5], dtype=float)
     # All zeros -> percentile is 0.0 -> scan_max <= 0
     sky_vals = np.array([0.0, 0.0], dtype=float)
-    args = Namespace(peak_frac=0.75, central_power_frac=0.60)
+    args = Namespace(site_location="Foo", peak_frac=0.75, central_power_frac=0.60)
 
     out = sm.choose_scan_and_centroid_time(t_path, f0, sky_times, sky_vals, args)
     assert out is None
@@ -624,6 +631,7 @@ def test_process_map_returns_none_when_no_rows(sun_maps, tmp_path):
     )
 
     args = Namespace(
+        site_location="Antarctica",
         peak_frac=0.75,
         central_power_frac=0.60,
         az_offset_bias=0.0,
