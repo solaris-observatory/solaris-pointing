@@ -94,6 +94,11 @@ Command-line usage examples
 11) Show only this example block and exit:
     python scripts/generate_offsets.py --examples
 
+12) Use a configuration profile from config/<name>.toml:
+    python scripts/generate_offsets.py --algo sun_maps \
+        --config mzs \
+        --data scans/
+
 -------------------------------------------------------------------------------
 Parameters (selected)
 -------------------------------------------------------------------------------

@@ -1,248 +1,278 @@
 # Solaris Pointing
 ![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)![Coverage Status](https://coveralls.io/repos/github/solaris-observatory/solaris-pointing/badge.svg?branch=main)
 
-This library provides a framework for the following workflow:
-**1)** creating a standard offset file from maps;
-**2)** building a pointing model from the offset file;
-**3)** applying the model during pointing.
-Each of these steps is explained in detail after the *Installation* section.
+# Solaris Pointing
 
+Solaris Pointing provides command-line tools to **compute solar pointing offsets** from Sun scan maps and to **fit azimuth/elevation pointing models** (polynomial + Fourier).  
+It is designed for telescope operations, diagnostics, and production of stable correction models used at millimetric observatories.
 
----
+This repository exposes **two user-facing CLIs**:
 
-## Installation
+- `generate_offsets.py` — discover Sun scan pairs, compute offset time series, and write a clean TSV.
+- `generate_model.py` — fit pointing models (AZ/EL), generate summaries and plots, and produce ready-to-use `.joblib` bundles.
 
-The recommended way to install solaris-pointing is by combining
-[pyenv](https://github.com/pyenv/pyenv) and
-[poetry](https://python-poetry.org)). With *pyenv* you can easily
-manage multiple Python versions, while *Poetry* takes care of creating
-virtual environments, handling dependencies, and packaging your project.
-
+Both scripts include comprehensive built-in `--examples`.
 
 ---
 
-### Install and Configure pyenv
+## Quickstart
 
-To install [pyenv](https://github.com/pyenv/pyenv)  on Linux/macOS:
-
-```bash
-curl https://pyenv.run | bash
-```
-
-Then add the following lines to your shell configuration file
-(*~/.bashrc*, *~/.zshrc*, etc.):
+### 1) Compute offsets from Sun scans
 
 ```bash
-export PATH="$HOME/.pyenv/bin:$PATH"
-eval "$(pyenv init -)"
-eval "$(pyenv virtualenv-init -)"
+python scripts/generate_offsets.py --data scans/ --algo sun_maps
 ```
 
-Reload your shell:
+This produces:
 
 ```
-exec "$SHELL"
+offsets/
+└── sun_maps.tsv
 ```
 
-Install Python 3.11:
+Each line contains `azimuth`, `offset_az`, `offset_el`, metadata, and algorithm-specific fields.
 
-```
-pyenv install 3.11.12
-```
-
-Activate the shell:
-
-```
-pyenv shell 3.11.12
-```
-
-Verify the installation:
-
-```
-python --version
-```
-
-You should see ``Python 3.11.12``
-
-Now your shell is running Python 3.11 through *pyenv*.
+---
 
 
-### Install Poetry
-
-On Linux/macOS:
+### Using a configuration profile
 
 ```bash
-curl -sSL https://install.python-poetry.org | python3 -
+python scripts/generate_offsets.py --algo sun_maps --config <profile> --data scans/
 ```
 
-Add Poetry to your PATH (if not already there):
+Profiles are loaded from `config/<profile>.toml` and override default CLI parameters.
+### 2) Fit pointing models from one or more TSV files
 
 ```bash
-# Bash/Zsh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc    # or ~/.zshrc
+python scripts/generate_model.py fit offsets/sun_maps.tsv
 ```
 
-Reload your shell and install `poetry-plugin-shell`:
+This writes per-axis models, summaries, and plots:
 
-```bash
-exec "$SHELL"
-poetry env activate
-poetry self add poetry-plugin-shell
 ```
-
-### Install solaris-pointing
-
-```bash
-git clone https://github.com/solaris-observatory/solaris-pointing.git
-cd solaris-pointing
-pyenv shell 3.11.12 # Activate the pyenv 3.11.12 shell
-poetry install # Install project + dev dependencies
-```
-
-Whenever you want to use *solaris-pointing*, you just need to activate the
-right shells:
-
-```bash
-pyenv shell 3.11.12
-poetry shell   # Run this inside the solaris-pointing directory
-```
-
-The first command, ``pyenv shell 3.11.12``, tells your terminal to use
-Python version 3.11.12 for this session. The second command,
-``poetry shell``, activates the virtual environment that
-Poetry created for solaris-pointing. This ensures you are running
-Python with all the correct dependencies for the project.
-
-To check the installation, run an example from the root of
-``solaris-pointing``:
-
-```bash
-python examples/offset_io_example.py
+models/
+├── sun_maps_az.joblib
+├── sun_maps_el.joblib
+├── sun_maps_summary_az.txt
+├── sun_maps_summary_el.txt
+├── sun_maps_az.png
+├── sun_maps_el.png
+└── sun_maps.joblib
 ```
 
 ---
 
-## Workflow
+## What this package provides
 
-Now let's look in detail at the following steps of the workflow:
+- **Offset computation** from raw Sun scans (`.path` + `.sky` pairs), including:
+  - recursive scan discovery;
+  - date filtering via stem timestamps: `YYMMDDTHHMMSS...`;
+  - atmospheric refraction (optional);
+  - telescope & site metadata;
+  - power/peak selection thresholds.
 
-* creating a standard offset file from maps;
-* building a pointing model from the offset file;
-* applying the model during pointing.
+- **Pointing-model fitting** with:
+  - polynomial degree `--degree`;
+  - MAD-based outlier rejection (`--zscore`);
+  - ridge regularization (`--ridge-alpha`);
+  - Fourier terms (`--fourier-k`);
+  - custom periods (`--periods-deg`);
+  - per-axis or unified fits;
+  - auto-generated Python function for each axis (included in summaries).
 
+- **Model prediction** at arbitrary azimuths.
 
-### Creating a standard offset file
-
-Any script responsible for calculating offsets should use the
-``offset_io`` module from solaris-pointing to generate a standard
-output file. This file is required as input for step 2 of the workflow.
-
-The easiest way to start is by reading the included [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/offset_io_example.py), which contains
-a detailed **docstring**. In the example you will see:
-
-- How to **import** `offset_io`
-- How to **prepare** pointing offset data
-- How to **write** them into the **standard format**
-
-To integrate `offset_io` into your own code, use the [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/offset_io_example.py) as a template.
-
-
-### Building a pointing model from the offset file
-
-Once the offset file has been generated, you can use the ``az_model_cli.py``
-script to create the pointing model. Suppose the offset file is located
-in the *templates* directory at the root of ``solaris-pointing``. Here's
-how to create a pointing model (in this case, of degree 5):
-
-```bash
-python scripts/az_model_cli.py templates/output_offset_io_example.tsv --degree 5 --plot --plot-file output/models/fit_plot.png
-```
-
-Note that the script ``az_model_cli.py`` creates an **azimuth-only** pointing
-model: **both** offsets (`offset_az`, `offset_el`) are modeled as functions
-of **azimuth** only. That's because, when the target is the Sun, the elevation
-at a given azimuth changes slowly across days, so a short-lived model can
-approximate both offsets as polynomials of azimuth.
-
-**Tip**: re-fit the model every *N* days so the approximation remains valid for
-your current observing window.
-
-#### More about creating the model
-
-This CLI ``az_model_cli.py`` is not designed to show how to compute
-offsets in your real-time pointing routine. Refer to
-*"[Applying the model during pointing](#applying-the-model-during-pointing)"*
-instead.
-
-**Fit and save models (input in degrees, default):**
-```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --summary output/models/fit_summary.txt
-```
-
-**Fit when input offsets are in arcminutes or arcseconds:**
-```bash
-# arcminutes
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcmin     --degree 3     --summary output/models/fit_summary.txt
-
-# arcseconds
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --input-offset-unit arcsec     --degree 3     --summary output/models/fit_summary.txt
-```
-
-**Choose custom output paths for the saved models:**
-```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --save-az-model offsets/custom_models/az_model.joblib     --save-el-model output/custom_models/el_model.joblib     --summary output/custom_models/fit_summary.txt
-```
-
-**Plot the fit (and optionally save a PNG):**
-```bash
-python scripts/az_model_cli.py     templates/output_offset_io_example.tsv     --degree 3     --plot     --plot-unit arcmin     --plot-file output/models/fit_plot.png
-```
-
-**Predict offsets (using saved models):**
-```bash
-python scripts/az_model_cli.py --predict 125.0
-# or with explicit model paths:
-python scripts/az_model_cli.py     --predict 125.0     --az-model output/models/az_model.joblib     --el-model output/models/el_model.joblib
-```
-
-### Applying the model during pointing.
-
-Use the model to apply offsets when creating a map or, more generally,
-when pointing to a source. See this [example](https://github.com/solaris-observatory/solaris-pointing/blob/main/examples/az_model_example.py) for a tiny integration
-example that loads previously fitted models, predicts
-the offsets for a given azimuth, and applies them to your ideal pointing.
-Here is a summary:
-
-```python
-from solaris_pointing.fitting.az_model import load_models, predict_offsets_deg
-
-ideal_az_deg, ideal_el_deg = 125.0, 40.0
-az_model, el_model = load_models("output/models/az_model.joblib", "output/models/el_model.joblib")
-off_az_deg, off_el_deg = predict_offsets_deg(az_model, el_model, ideal_az_deg)
-corr_az_deg, corr_el_deg = ideal_az_deg + off_az_deg, ideal_el_deg + off_el_deg
-print(corr_az_deg, corr_el_deg)
-```
-
-The sign convention here is `corrected = ideal + offset`.
+- **Model merging** to create unified bundles.
 
 ---
 
-## Developer Guide (with tox)
+# Examples
 
-The project includes a **`tox`** configuration to simplify common development tasks
-(tests, linting, etc.).
+## 1) `generate_offsets.py`
 
-How it works:
+### Minimal run
 
-- `tox` (without arguments) runs lint + format-check + tests (py313)
-- `tox -e lint` runs only the linter.
-- `tox -e format-check` just format check (CI-safe; no changes)
-- `tox -e format` applies formatting locally (modifies files).
-- `tox -e py310,py311` runs tests on other Python versions if available.
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps
+```
 
+### Date filters
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-start 2025-01-01
+python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-end 2025-01-02
+python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-start 2025-01-01 --date-end 2025-01-03
+```
+
+### Observatory metadata
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps     --site-location "Antarctica" --site-code MZS     --site-lat -74.6950 --site-lon 164.1000 --site-height 30
+```
+
+### Telescope parameters
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps     --frequency 100 --diameter 2.0
+```
+
+### Atmospheric refraction
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps     --enable-refraction --pressure 990 --temperature -5 --humidity 0.5 --obswl 3.0
+```
+
+### Biases
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps     --az-offset-bias 0.10 --el-offset-bias -0.05
+```
+
+### Custom output directory
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps --outdir offsets_run_42
+```
 
 ---
 
-## License
+## 2) `generate_model.py`
 
-Released under the **MIT** License.
+### Minimal fit
+
+```bash
+python scripts/generate_model.py fit offsets/sun_maps.tsv
+```
+
+### Polynomial + Fourier
+
+```bash
+python scripts/generate_model.py fit scans.tsv     --degree 3 --zscore 2.5 --fourier-k 2 --plot-unit arcmin
+```
+
+### Axis selection
+
+```bash
+python scripts/generate_model.py fit input.tsv --az --degree 3 --fourier-k 1
+python scripts/generate_model.py fit input.tsv --el --degree 3 --fourier-k 1
+```
+
+### Multiple TSVs
+
+```bash
+python scripts/generate_model.py fit a.tsv b.tsv --degree 2 --zscore 2.0
+```
+
+### Input offset units
+
+```bash
+python scripts/generate_model.py fit offsets.tsv --input-offset-unit arcsec
+```
+
+### Predict offsets
+
+```bash
+python scripts/generate_model.py predict sun_maps --azimuth 12.0 --unit arcsec
+python scripts/generate_model.py predict sun_maps --az --azimuth 45.0 --unit arcmin
+python scripts/generate_model.py predict sun_maps --el --azimuth 45.0 --unit arcmin
+python scripts/generate_model.py predict sun_maps --az --azimuth 355.0 --allow-extrapolation
+```
+
+### Merge models
+
+```bash
+python scripts/generate_model.py merge sun_maps
+```
+
+---
+
+# Installation
+
+## With Poetry
+
+```bash
+poetry install
+poetry shell
+```
+
+## With pip
+
+Runtime-only:
+
+```bash
+pip install -r requirements.txt
+```
+
+Development:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+---
+
+# Repository structure
+
+```
+scripts/
+src/solaris_pointing/
+models/
+offsets/
+tests/
+```
+
+---
+
+# License
+
+MIT License.
+
+---
+
+# Configuration profiles (`--config`)
+
+`generate_offsets.py` supports loading configuration profiles from `config/<name>.toml`.
+
+A profile lets you store site parameters, telescope metadata, refraction settings,
+biases, thresholds, and any other CLI option — without typing long commands every time.
+
+## Usage
+
+```bash
+python scripts/generate_offsets.py --algo sun_maps --config mzs_default --data scans/
+```
+
+This loads:
+
+```
+config/mzs_default.toml
+```
+
+All keys in the TOML file override the default CLI parameters.
+Unknown keys trigger a non-blocking warning.
+
+## Example TOML profile
+
+```toml
+site-location = "Antarctica"
+site-code = "MZS"
+site-lat = -74.6950
+site-lon = 164.1000
+site-height = 30
+
+enable-refraction = true
+pressure = 690
+temperature = -7
+humidity = 0.5
+obswl = 3.0
+
+frequency = 100
+diameter = 2.0
+
+az-offset-bias = 0.10
+el-offset-bias = -0.05
+```
+
+Using profiles is recommended for observatory operations, where repeatability and
+clean reproducibility matter.
