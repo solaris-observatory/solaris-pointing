@@ -1,0 +1,44 @@
+# ======================================================================
+# Configuration file for the MZS (Mario Zucchelli Station) telescope
+# ======================================================================
+# All parameters here override values provided via command line.
+# These represent the stable physical and observational characteristics
+# of the site and telescope.
+# ======================================================================
+
+# ---------------------------
+# Site information
+# ---------------------------
+site-location = "Antarctica"
+site-code = "MZS"
+site-lat = -74.6950
+site-lon = 164.1000
+site-height = 30
+
+# ---------------------------
+# Telescope parameters
+# ---------------------------
+frequency = 100      # GHz
+diameter = 2.0       # meters
+
+# ---------------------------
+# Pointing offset biases
+# ---------------------------
+az-offset-bias = 0.0
+el-offset-bias = 0.0
+
+# ---------------------------
+# Atmospheric model
+# ---------------------------
+enable-refraction = true
+pressure = 990
+temperature = -5
+humidity = 0.5
+obswl = 3.0
+
+# ---------------------------
+# Selection thresholds
+# ---------------------------
+peak-frac = 0.75
+central-power-frac = 0.60
+

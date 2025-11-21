@@ -378,6 +378,21 @@ def _write_unified_bundle_and_summary(
     save_model_func(bundle, str(unified_joblib))
     text = model_summary_func(bundle)
     unified_summary.write_text(text)
+    # --- Append original TSV content to the unified summary ---
+    try:
+        tsv_path = bundle.meta.source_path
+        with open(tsv_path, "r", encoding="utf-8") as ff:
+            tsv_content = ff.read()
+
+        with open(unified_summary, "a", encoding="utf-8") as f:
+            f.write("\n\n" + 85*"*")
+            f.write("\nOffsets file content (Input)")
+            f.write("\n" + 85*"*" + "\n\n")
+            f.write(tsv_content)
+
+    except Exception as e:
+        with open(unified_summary, "a", encoding="utf-8") as f:
+            f.write(f"\n[ERROR] Could not read TSV file: {e}\n")
 
 
 # -----------
@@ -458,10 +473,24 @@ def cmd_fit(args: argparse.Namespace) -> int:
 
         # Read back data for plotting & period detection
         dfp = read_offsets_tsv(work_path)
+        # ---- Extract data_code from TSV ----
+        cols = [c.strip().lower() for c in dfp.columns]
+
         az = dfp["azimuth"].to_numpy(float) % 360.0
         off_az = dfp["offset_az"].to_numpy(float)
         off_el = dfp["offset_el"].to_numpy(float)
         az_lin, cut, lo, hi = unwrap_azimuth(az)
+
+        # ---- Extract data_code from metadata comments inside the TSV ----
+        data_code = ""
+        try:
+            with open(work_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if "Code from data:" in line:
+                        data_code = line.split("Code from data:")[1].strip()
+                        break
+        except Exception:
+            pass
 
         # --- Detect overall period info (for titles/summaries)
         period_info: tuple[str | None, str | None, bool, str] = (None, None, False, "")
@@ -516,6 +545,10 @@ def cmd_fit(args: argparse.Namespace) -> int:
         if ps and pe:
             gap_mark = " **" if has_gaps else ""
             top_line = f"{stem}: ({ps} -- {pe}){gap_mark}"
+            if data_code:
+                top_line = f"{stem}: {data_code} ({start_str} -- {end_str})"
+            else:
+                top_line = f"{stem}: ({start_str} -- {end_str})"
         else:
             top_line = stem
 

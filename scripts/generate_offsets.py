@@ -4,8 +4,13 @@ Discover Sun scan pairs (.path/.sky), compute pointing offsets, and write a TSV.
 
 This CLI is a thin driver around algorithms in
 `solaris_pointing.offsets.algos.<algo>`. It discovers valid map pairs
-(recursively under --data), imports the selected algorithm, and calls its public
-API to compute and append results to a single TSV file.
+(recursively under --data), imports the selected algorithm, and calls its
+public API to compute and append results to a single TSV file.
+
+The driver resolves all operational parameters (site, refraction, thresholds,
+and biases), extracts the site data code from each <map_id> (e.g.,
+250101T195415_OASI → OASI), and forwards everything to the algorithm's
+`process_map()` / `append_result_tsv()` functions.
 
 The default behavior (no date filters) matches current `sun_maps`. Optional
 filters restrict maps to a date range inferred from the stem prefix
@@ -18,6 +23,7 @@ Key features
 -------------------------------------------------------------------------------
 - Recursively discover <stem>.path and <stem>.sky under --data.
 - Exclude stems that match the pattern 'T<HHMMSS>b' (e.g. 250101T210109bOASI).
+- Automatically extract the site data code from each <map_id>.
 - Optional inclusive date filters: --date-start / --date-end.
 - Pass-through site/refraction parameters for AltAz construction (when enabled).
 - Append all results to a single TSV named <algo>.tsv under --outdir.
@@ -30,6 +36,10 @@ Input / output conventions
 - Input directory: provided via --data (searched recursively).
 - Valid pair: `<stem>.path` and `<stem>.sky` exist and do not match
   the exclusion rule `T\\d{6}b`.
+- Nickname extraction (for metadata): from <stem> via:
+      YYMMDDTHHMMSS_<NICK>      (preferred)
+      YYMMDDTHHMMSSb<NICK>
+      YYMMDDTHHMMSS<NICK>
 - Output TSV path: `<outdir>/<algo>.tsv` (directory is created if missing).
 - When `--examples` is provided, no discovery or computation occurs; the script
   simply prints the example block extracted from this docstring and exits.
@@ -52,28 +62,44 @@ Command-line usage examples
    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
        --date-start 2025-01-01 --date-end 2025-01-03
 
-5) Enable refraction with site meteo (used only with --enable-refraction):
+5) Pass observatory site parameters for metadata:
    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
-       --enable-refraction --pressure 990 --temperature -5 \
-       --humidity 0.5 --obswl 3.0
+       --site-location "Antarctica" \
+       --site-code MZS \
+       --site-lat -74.6950 --site-lon 164.1000 --site-height 30
 
-6) Apply fixed biases to computed offsets (degrees):
+6) Specify telescope parameters (frequency and diameter):
+   python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+       --frequency 100 --diameter 2.0
+
+7) Enable refraction with meteo parameters:
+   python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+       --enable-refraction \
+       --pressure 990 --temperature -5 --humidity 0.5 --obswl 3.0
+
+8) Apply fixed biases to computed offsets (degrees):
    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
        --az-offset-bias 0.10 --el-offset-bias -0.05
 
-7) Write results under a custom output directory:
+9) Combine multiple site/telescope parameters:
    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
-       --outdir offsets_run_42
+       --site-location "Antarctica" --site-code MZS \
+       --frequency 100 --diameter 2.0 \
+       --enable-refraction --pressure 990 --temperature -5
 
-8) Show only this example block and exit:
-   python scripts/generate_offsets.py --examples
+10) Write results under a custom output directory:
+    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+        --outdir offsets_run_42
+
+11) Show only this example block and exit:
+    python scripts/generate_offsets.py --examples
 
 -------------------------------------------------------------------------------
 Parameters (selected)
 -------------------------------------------------------------------------------
 --algo (str)                  Algorithm module under
                               `solaris_pointing.offsets.algos`, e.g. sun_maps.
---examples                    Print the “Command-line usage examples” section
+--examples                    Print the "Command-line usage examples" section
                               from this docstring and exit.
 --data (str)                  Root directory for discovery (recursive).
 --outdir (str)                Directory for the output TSV (default: ./offsets).
@@ -83,6 +109,12 @@ Parameters (selected)
 
 --site-lon / --site-lat       Observatory coordinates (degrees).
 --site-height (m)             Observatory altitude.
+--site-location (str)         Full site location string for metadata.
+--site-code (str)             Short site code (e.g., MZS).
+
+--frequency (GHz)             Observing frequency.
+--diameter (m)                Telescope diameter.
+
 --enable-refraction           Enable atmospheric refraction.
 --pressure / --temperature    Meteo parameters (used only with refraction).
 --humidity (0..1)             Relative humidity (fraction).
@@ -99,6 +131,8 @@ Notes
 - Date parsing is based on the stem prefix `YYMMDDTHHMMSS...`. Stems without a
   valid timestamp are processed only when no date filter is requested.
 - Excluded stems (rule `T\\d{6}b`) are never processed.
+- The site data code is derived from each <map_id> and passed through to the
+  algorithm as part of the metadata context.
 - Results are appended incrementally; each `[OK]` line indicates a successful
   append for the current map.
 - The `--examples` option is processed before any discovery or computation.
@@ -108,6 +142,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import tomllib
 import re
 from types import SimpleNamespace
 from typing import Optional
@@ -124,6 +159,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Import an algorithm as `solaris_pointing.offsets.algos.<algo>` and "
             "invoke its `run(params)` with a Namespace of parameters."
         )
+    )
+    p.add_argument(
+        "--config",
+        type=str,
+        help=(
+            "Configuration profile name (loads config/<name>.toml and "
+            "overrides CLI parameters)"
+        ),
     )
     p.add_argument(
         "--algo",
@@ -173,7 +216,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="Observatory height in meters (default: 30.0).",
     )
-
+    p.add_argument(
+        "--site-location",
+        type=str,
+        default="Unknown",
+        help="Location name for metadata (e.g., 'Antarctica').",
+    )
+    p.add_argument(
+        "--site-code",
+        type=str,
+        default="Unknown",
+        help="Short site code (e.g., MZS).",
+    )
+    p.add_argument(
+        "--frequency",
+        type=float,
+        default=None,
+        help="Observing frequency in GHz.",
+    )
+    p.add_argument(
+        "--diameter",
+        type=float,
+        default=None,
+        help="Telescope diameter in meters.",
+    )
     p.add_argument(
         "--az-offset-bias",
         type=float,
@@ -342,6 +408,64 @@ def extract_examples_from_docstring() -> str:
     return title, body
 
 
+def extract_data_code(stem: str) -> str:
+    """
+    Extract site data code from map_id stem.
+
+    Priority:
+      1) YYMMDDTHHMMSS_<DATACODE>
+      2) YYMMDDTHHMMSSbDATACODE
+      3) YYMMDDTHHMMSSDATACODE
+    """
+    # A) underscore-based format (text file convention)
+    if "_" in stem[13:]:
+        return stem.split("_", 1)[1]
+
+    # B) compact format with optional 'b'
+    core = stem[13:]
+    if core.startswith("b"):
+        core = core[1:]
+
+    return core
+
+
+def load_config_and_override(params, config_name):
+    """
+    Load TOML config file config/<name>.toml and override fields in params.
+
+    Rules:
+    - If config file is missing: raise clear error.
+    - Keys with '-' are converted to '_' to match Namespace attributes.
+    - Unknown keys: printed as warnings (non-blocking).
+    - Type mismatches: printed as warnings but kept as strings
+      (it's safer not to auto-convert if uncertain).
+    """
+    config_path = Path("config") / f"{config_name}.toml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"[ERROR] Config file not found: {config_path}")
+
+    with open(config_path, "rb") as f:
+        try:
+            data = tomllib.load(f)
+        except Exception as e:
+            raise ValueError(f"[ERROR] Invalid TOML config: {config_path}\n{e}")
+
+    print(f"[INFO] Loaded config: {config_path}")
+
+    for key, value in data.items():
+        # convert TOML-style keys (dashes) to Python attribute names
+        attr = key.replace("-", "_")
+
+        if not hasattr(params, attr):
+            print(f"[WARNING] Unknown config key ignored: {key}")
+            continue
+
+        # assign directly (no aggressive type casting — safer)
+        setattr(params, attr, value)
+
+    return params
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -361,11 +485,17 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     # Build params Namespace (kept as Namespace for direct compatibility)
     params = SimpleNamespace(
+        config=args.config,
         data=args.data,
         outdir=args.outdir,
+        algo=args.algo,
         site_lon=args.site_lon,
         site_lat=args.site_lat,
         site_height=args.site_height,
+        site_location=args.site_location,
+        site_code=args.site_code,
+        frequency=args.frequency,
+        diameter=args.diameter,
         az_offset_bias=args.az_offset_bias,
         el_offset_bias=args.el_offset_bias,
         peak_frac=args.peak_frac,
@@ -378,6 +508,12 @@ def main(argv: Optional[list[str]] = None) -> None:
         date_start=args.date_start,
         date_end=args.date_end,
     )
+
+    # --------------------------------------------------------------
+    # Load configuration file (if provided) and override parameters
+    # --------------------------------------------------------------
+    if args.config:
+        params = load_config_and_override(params, args.config)
 
     # Import the algorithm module and call run(params)
     module_name = f"solaris_pointing.offsets.algos.{args.algo}"
@@ -425,7 +561,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     def _discover_pairs_recursive(root: Path):
         """
         Recursively find (.path, .sky) pairs under `root`, excluding names that
-        contain a 'b' immediately after the time component: 'T\d{6}b'.
+        contain a 'b' immediately after the time component.
         Optionally filter by inclusive dates using args.date_start / args.date_end,
         where the date is parsed from the stem prefix 'YYMMDDTHHMMSS...'.
         Returns a list of tuples: (map_id, path_file, sky_file).
@@ -488,7 +624,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             raise FileNotFoundError(f"--data path not found: {root}")
         pairs = _discover_pairs_recursive(root)
     else:
-        raise FileNotFoundError(f"No data found in {root}")
+        raise FileNotFoundError(f"No data found: use argument --data")
 
     if not pairs:
         print("No valid <map_id>.path / <map_id>.sky pairs found.")
@@ -500,16 +636,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     total = len(pairs)
 
     for idx, (map_id, path_fname, sky_fname) in enumerate(pairs, start=1):
+        params.data_code = extract_data_code(map_id)
         try:
             res = process_map(map_id, path_fname, sky_fname, params)
             if res is None:
                 print(f"[WARN] Skipping {map_id}: could not compute offsets.")
                 continue
-            append_result_tsv(str(out_path), res)
+            append_result_tsv(str(out_path), res, params)
             width = len(str(total))
             print(f"[OK] {idx:0{width}d}/{total}: {map_id} -> appended to {out_name}")
         except Exception as e:
-            print(f"[ERROR] {map_id}: {e}")
+            raise SystemExit(f"[ERROR] {map_id}: {e}")
 
     print(f"[DRIVER] Output file: {out_path}")
 

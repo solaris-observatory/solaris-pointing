@@ -13,6 +13,26 @@ Compared to the previous format, the following changes apply:
   - The semantics of `timestamp` are clarified in the metadata block as the
     instant when the telescope pointed at the Sun's centroid.
   - Angles remain in *degrees*. Offsets are serialized with four decimals.
+  - Software metadata now includes a URL pointing to the repository tree at
+    the current short commit and may include the full commit SHA.
+
+Metadata block
+--------------
+The commented metadata block includes the full set of context information
+passed through the `Metadata` dataclass. This covers:
+
+  - Site information (location string, site code, site data code,
+    latitude/longitude, height).
+  - Telescope parameters (antenna diameter, observing frequency).
+  - Bias parameters for azimuth and elevation.
+  - Refraction mode and, when applicable, relevant atmospheric parameters.
+  - Algorithm name used to generate the offsets.
+  - Software information (URL to the repository tree at the short commit
+    and, optionally, the full commit SHA).
+  - Creation timestamp for the metadata block.
+
+For the exhaustive list of fields and their units, refer to the `Metadata`
+dataclass definition in this module.
 
 Important on separators
 -----------------------
@@ -24,7 +44,7 @@ All other field separators are tabs. Concretely, the header is:
 Units and conventions
 ---------------------
 - azimuth_deg, elevation_deg: observed angles [deg]
-- offset_az_deg, offset_el_deg: (solar − observed) angles [deg]
+- offset_az_deg, offset_el_deg: (observed − solar) angles [deg]
 - temperature_c: degrees Celsius [°C]
 - pressure_hpa: hectoPascal [hPa]
 - humidity_frac: relative humidity in [0, 1]
@@ -42,7 +62,7 @@ Quickstart
 ...     location="Mario Zucchelli Station, Antarctica",
 ...     antenna_diameter_m=1.2,
 ...     frequency_ghz=100,
-...     software_version="1.4.0",
+...     # and several optional arguments
 ... )
 >>> rows = [
 ...     Measurement(
@@ -88,27 +108,69 @@ class Metadata:
 
     Parameters
     ----------
-    location : str
-        Site name / location string.
     antenna_diameter_m : float
         Antenna diameter in meters.
     frequency_ghz : float
-        Observing frequency in GHz. Serialized as GHz in the metadata block.
-    software_version : str
-        Free-form software version string (e.g., '1.4.0').
+        Observing frequency in GHz.
+
+    site_location : Optional[str]
+        General site location (e.g. "Antarctica").
+    site_code : Optional[str]
+        Short site identifier code (e.g. "MZS").
+    data_code: Optional[str]
+        Code extrapolated from data (e.g. OASI).
+    site_lat : Optional[float]
+        Site latitude in degrees.
+    site_lon : Optional[float]
+        Site longitude in degrees.
+    site_height : Optional[float]
+        Site height in meters.
+    az_offset_bias : Optional[float]
+        Applied azimuth offset bias in degrees.
+    el_offset_bias : Optional[float]
+        Applied elevation offset bias in degrees.
+    refraction : Optional[str]
+        "enabled" or "disabled".
+    algo : Optional[str]
+        Name of the algorithm used to generate the offsets.
+    software_url : Optional[str]
+        URL pointing to the exact commit used.
+    software_commit: Optional[str]
+        Commit of the software.
     created_at_iso : Optional[str]
-        ISO-8601 UTC timestamp string for file creation. If None, the current
-        time in UTC is used.
+        ISO-8601 UTC timestamp string for file creation. If None, current UTC is used.
     """
 
-    location: str
-    antenna_diameter_m: float
-    frequency_ghz: float
-    software_version: str
+    config_file: Optional[str] = None
+    algo: Optional[str] = None
+    # Telescope
+    antenna_diameter_m: Optional[float] = None
+    frequency_ghz: Optional[float] = None
+    az_offset_bias: Optional[float] = None
+    el_offset_bias: Optional[float] = None
+    # Site information
+    site_location: Optional[str] = None
+    site_code: Optional[str] = None
+    data_code: Optional[str] = None
+    site_lat: Optional[float] = None
+    site_lon: Optional[float] = None
+    site_height: Optional[float] = None
+    # Refraction parameters
+    refraction: Optional[str] = None
+    pressure_hpa: Optional[float] = None
+    temperature_c: Optional[float] = None
+    humidity_frac: Optional[float] = None
+    obswl_mm: Optional[float] = None
+    # Algo parameters
+    peak_frac: Optional[float] = None
+    central_power_frac: Optional[float] = None
+    # Additional information
+    software_url: Optional[str] = None
+    software_commit: Optional[str] = None
     created_at_iso: Optional[str] = None
 
     def created_iso_or_now(self) -> str:
-        """Return `created_at_iso` if provided, else now in UTC as ISO-8601."""
+        """Return created_at_iso if provided, else now in UTC as ISO-8601."""
         if self.created_at_iso:
             return self.created_at_iso
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -169,50 +231,83 @@ class Measurement:
 
 
 def _write_metadata_block(f: TextIO, md: Metadata) -> None:
-    """
-    Write the commented metadata block and column dictionary.
+    """Write the commented metadata block."""
+    metadata_title = "# === Metadata " + 70*"=" + "\n"
+    f.write(metadata_title)
 
-    Sections:
-      - Telescope
-      - File columns
-      - Additional information
-    """
-    created = md.created_iso_or_now()
-
-    # Telescope
-    f.write("# ---------\n")
-    f.write("# Telescope\n")
-    f.write("# ---------\n")
-    f.write(f"# Location: {md.location}\n")
-    f.write(f"# Antenna diameter: {md.antenna_diameter_m} m\n")
-    f.write(f"# Frequency: {md.frequency_ghz} GHz\n")
+    # ---------------------------
+    # Site information
+    # ---------------------------
+    f.write("# [Site]\n")
+    if md.site_location:
+        f.write(f"#  Location: {md.site_location}\n")
+    if md.site_code:
+        f.write(f"#  Code: {md.site_code}\n")
+    if md.data_code:
+        f.write(f"#  Code from data: {md.data_code}\n")
+    if md.site_lat is not None:
+        f.write(f"#  Latitude (deg): {md.site_lat}\n")
+    if md.site_lon is not None:
+        f.write(f"#  Longitude (deg): {md.site_lon}\n")
+    if md.site_height is not None:
+        f.write(f"#  Height (m): {md.site_height}\n")
     f.write("#\n")
 
-    # File columns
-    f.write("# ------------\n")
-    f.write("# File columns\n")
-    f.write("# ------------\n")
-    f.write("# map_id: map identifier\n")
-    f.write(
-        "# timestamp: time when the telescope pointed at the Sun's "
-        "centroid [ISO 8601]\n"
-    )
-    f.write("# azimuth: of the Sun's centroid from ephemerides [deg]\n")
-    f.write("# elevation: of the Sun's centroid from ephemerides [deg]\n")
-    f.write("# offset_az: observed azimuth - solar azimuth [deg]\n")
-    f.write("# offset_el: observed elevation - solar elevation [deg]\n")
-    f.write("# temperature: °C\n")
-    f.write("# pressure: hPa\n")
-    f.write("# humidity: relative humidity, fraction (0..1)\n")
+    # ---------------------------
+    # Telescope parameters
+    # ---------------------------
+    f.write("# [Telescope]\n")
+    if md.antenna_diameter_m is not None:
+        f.write(f"#   Diameter (m)    : {md.antenna_diameter_m}\n")
+    if md.frequency_ghz is not None:
+        f.write(f"#   Frequency (GHz) : {md.frequency_ghz}\n")
     f.write("#\n")
 
-    # Additional information
-    f.write("# ----------------------\n")
-    f.write("# Additional information\n")
-    f.write("# ----------------------\n")
-    f.write(f"# Generated with software version: {md.software_version}\n")
-    f.write(f"# Created at: {created}\n")
-    f.write("\n")
+    # ---------------------------
+    # Algorithm parameters
+    # ---------------------------
+    f.write("# [Algorithm]\n")
+    if md.algo:
+        f.write(f"#  Name: {md.algo}\n")
+    if md.az_offset_bias is not None:
+        f.write(f"#  AZ offset bias (deg): {md.az_offset_bias}\n")
+    if md.el_offset_bias is not None:
+        f.write(f"#  EL offset bias (deg): {md.el_offset_bias}\n")
+    if md.refraction is not None:
+        f.write(f"#  Refraction: {md.refraction}\n")
+    if md.pressure_hpa is not None:
+        f.write(f"#  Pressure (hPa): {md.pressure_hpa}\n")
+    if md.temperature_c is not None:
+        f.write(f"#  Temperature (C): {md.temperature_c}\n")
+    if md.humidity_frac is not None:
+        f.write(f"#  Humidity (frac): {md.humidity_frac}\n")
+    if md.obswl_mm is not None:
+        f.write(f"#  Wavelength (mm): {md.obswl_mm}\n")
+    if md.peak_frac is not None:
+        f.write(f"#  Peak fraction: {md.peak_frac}\n")
+    if md.central_power_frac is not None:
+        f.write(f"#  Central power frac: {md.central_power_frac}\n")
+    f.write("#\n")
+
+    # ---------------------------
+    # Software information
+    # ---------------------------
+    f.write("# [Software]\n")
+    if md.software_url:
+        f.write(f"#  Repository: {md.software_url}\n")
+    if md.software_commit:
+        f.write(f"#  Commit SHA: {md.software_commit}\n")
+    f.write("#\n")
+
+    # ---------------------------
+    # Run information
+    # ---------------------------
+    f.write("# [Run]\n")
+    if md.config_file:
+        f.write(f"#  Config file: {md.config_file}\n")
+    if md.created_at_iso:
+        f.write(f"#  Created at (UTC): {md.created_at_iso}\n")
+    f.write("# " + (len(metadata_title) -2)*"=" + "\n")
 
 
 def _expected_columns() -> List[str]:
@@ -352,7 +447,7 @@ def write_offsets_tsv(
 if __name__ == "__main__":
     # Minimal smoke test / example writer. Adjust values as needed.
     md = Metadata(
-        location="Mario Zucchelli Station, Antarctica",
+        site_location="Mario Zucchelli Station, Antarctica",
         antenna_diameter_m=1.2,
         frequency_ghz=100,
         software_version="1.4.0",
