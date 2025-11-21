@@ -12,19 +12,20 @@ Overview of algorithm
 ---------------------
 The procedure follows four main rules:
 
-A) Select scans whose signal peak exceeds 75% of the global maximum and whose
-   total power is above 75% of the maximum total power.
+A) Select scans whose signal peak exceeds ``args.peak_frac`` of the global
+   maximum and whose total power exceeds ``args.central_power_frac`` of the
+   maximum central power.
 
-B) Among these scans, compute the centroid time as the mean of timestamps
-   corresponding to samples with signal >= 0.75 x (scan max).
+B) Among these scans, compute the centroid time as the time-weighted mean
+   of samples with signal >= ``args.peak_frac * scan_max``.
 
-C) Choose the scan whose "central power" (mean of those high-signal samples)
-   is >= 0.55 x MaxCentralPower and which lies in the median time position
-   among the selected scans.
+C) Choose the scan whose "central power" (mean of the above-threshold
+   samples) is >= ``args.central_power_frac * MaxCentralPower`` and which is
+   median in time among the selected scans.
 
-D) Compute the solar apparent position via Astropy (`get_sun`, `AltAz`)
-   including atmospheric refraction, and calculate daz, del between observed
-   and ephemeris coordinates.
+D) Compute the solar apparent position via Astropy (``get_sun``, ``AltAz``),
+   optionally including atmospheric refraction, and calculate ``daz`` and
+   ``del`` between observed and ephemeris coordinates.
 
 Input data
 ----------
@@ -43,62 +44,60 @@ Each map is defined by two tab-separated files sharing the same base name
    - Signal: measured power or brightness temperature
 
 Timestamps from the two files are not synchronized sample-by-sample.
-For each scan (F0 == 1 in the .path file), .sky samples within the scan time
-range are associated and analyzed together.
+For each scan (F0 == 1 in the .path file), .sky samples within the scan
+time range are associated and analyzed together.
 
 Scan analysis and centroid determination
 ----------------------------------------
 - Consecutive F0 == 1 rows in .path define a scan.
 - For each scan, compute the maximum signal in .sky.
-- Select .sky samples where Signal >= 0.75 x (scan max).
-- The centroid time is the mean of these timestamps.
+- Select .sky samples where Signal >= ``args.peak_frac * scan_max``.
+- The centroid time is the time-weighted mean ("baricenter") of these
+  high-signal timestamps.
 - The observed azimuth/elevation are taken from the nearest .path row
   (no interpolation) corresponding to that centroid time.
 - Each scan's "central power" is the mean of the high-signal samples.
-- The scan whose central power >= 0.75 x MaxCentralPower and is temporally
-  median among the candidates is used to compute the offsets.
+- The scan fulfilling the selection criteria and median in time among
+  candidates is used to compute the offsets.
 
 Computation of offsets
 ----------------------
 Offsets are computed as:
 
-    daz = az_observed_centroid - az_ephemeris_centroid
-    del = el_observed_centroid - el_ephemeris_centroid
+    daz = az_observed_centroid - az_ephemeris_centroid + args.az_offset_bias
+    del = el_observed_centroid - el_ephemeris_centroid + args.el_offset_bias
+
+Azimuth is wrapped to the [-180, 180] deg range after applying the bias.
 
 Bias and wrapping
 -----------------
-- Azimuth and elevation bias (default +0.0 deg) are applied to the
-  offsets (instrumental encoder convention). The values are configurable
-  via CLI option: ``--az-offset-bias`` and ``--el-offset-bias``
-- Azimuths are wrapped to the [0, 360) deg range so that offsets
-  correspond to the shortest angular distance.
+- Biases (``--az-offset-bias``, ``--el-offset-bias``) are applied after
+  subtracting the ephemeris coordinates.
+- Azimuths are wrapped to [-180, 180] deg so that the resulting offset
+  corresponds to the minimal angular difference.
 
 Coordinate and atmospheric model
 --------------------------------
-All positions are expressed in the apparent AltAz frame as computed by
-Astropy. Atmospheric refraction can be enabled with the `--enable-refraction` flag
-(disabled by default). When enabled, the following parameters are used and
-are configurable via CLI (defaults shown, typical for MZS summer and ~100 GHz):
+All apparent positions are computed in the AltAz frame via Astropy.
+Atmospheric refraction can be enabled with ``--enable-refraction``; when
+enabled, the AltAz frame includes site pressure, temperature, humidity,
+and wavelength (``--pressure``, ``--temperature``, ``--humidity``,
+``--obswl``).
 
-- pressure = 990 hPa (``--pressure``)
-- temperature = -5 C (``--temperature``)
-- relative_humidity = 0.2 (``--humidity``)
-- obswl = 3 mm  (``--obswl``; approx. 100 GHz)
-
-The observing site defaults to:
-latitude = -74.694 deg, longitude = 164.120 deg, height = 50 m.
-These coordinates are configurable via CLI options. The height is
-used by EarthLocation to compute the local geocentric position.
+The observing site parameters (``--site-lat``, ``--site-lon``,
+``--site-height``) are passed from the driver. No default site is assumed
+in the algorithm; defaults are applied by the CLI layer.
 
 Thresholds
 ----------
-The following selection thresholds are configurable via CLI:
-- ``--peak-frac`` (default 0.75)
-- ``--central-power-frac`` (default 0.60)
+Selection thresholds are controlled via CLI:
+- ``--peak-frac`` (default 0.75) for local scan peak selection.
+- ``--central-power-frac`` (default 0.60) for global central power filtering.
 
 Output format
 -------------
-One line per map is appended to the output TSV file with columns:
+One line per map is appended to the output TSV by the driver.
+Each line contains:
 
 - map_id
 - centroid_utc
@@ -107,30 +106,38 @@ One line per map is appended to the output TSV file with columns:
 - delta_az_deg
 - delta_el_deg
 
-Metadata stored in the file header include:
-- Location: MZS, Antarctica
-- Antenna diameter: 2.0 m
-- Observing frequency: 100 GHz
-- Software version: current repository revision
+Metadata stored in the file header (written by ``write_offsets_tsv``) include:
+- Site location, site code, and site data code (derived from ``map_id``).
+- Telescope parameters: antenna diameter, observing frequency.
+- Site coordinates and height.
+- Bias values and refraction mode.
+- Algorithm name.
+- Software URL: repository tree at the current short commit hash.
+- Software commit: full commit SHA.
+- Timestamp of metadata creation.
+
+(Older hard-coded metadata such as "MZS, Antarctica" or fixed telescope
+parameters are no longer embedded in this file; all site/telescope metadata
+are passed from the driver at runtime.)
 
 Physical meaning and rationale for Astropy
 ------------------------------------------
-Astropy's ephemeris engine provides a physically consistent solar position
+Astropy's ephemeris engine provides physically consistent solar position
 through ERFA, implementing the official IAU astrometry algorithms and
 accounting for precession, nutation, aberration, relativistic effects,
-polar motion, and UT1-UTC corrections. It also models refraction using the
+polar motion, and UT1–UTC corrections. It also models refraction using the
 actual observer pressure, temperature, humidity, and wavelength, which is
 essential for low-elevation solar observations typical in Antarctica.
 
 By contrast, PySolar employs simplified empirical formulas derived from
 NOAA/NREL solar-position models intended for photovoltaic applications.
-These neglect site altitude, polar motion, and most atmospheric dependencies,
-assuming standard sea-level conditions (~1013 hPa, 10 C). Consequently,
-PySolar can introduce systematic errors of several arcminutes near the
-horizon.
+These neglect site altitude, polar motion, and most atmospheric
+dependencies, assuming standard sea-level conditions (~1013 hPa, 10 C).
+Consequently, PySolar can introduce systematic errors of several arcminutes
+near the horizon.
 
-For these reasons, Astropy ensures sub-arcminute consistency and is preferred
-for scientific pointing calibration.
+For these reasons, Astropy ensures sub-arcminute consistency and is
+preferred for scientific pointing calibration.
 
 Possible extensions
 -------------------
@@ -143,6 +150,7 @@ import os
 import glob
 import csv
 import argparse
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -155,6 +163,19 @@ from solaris_pointing.offsets.io import (
     Measurement,
     write_offsets_tsv,
 )
+
+
+def _get_git_commit():
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
 
 
 @dataclass
@@ -448,8 +469,7 @@ def compute_ephem(dt_utc: datetime, args: argparse.Namespace) -> Tuple[float, fl
             obstime=t,
             location=loc,
             pressure=args.pressure * u.hPa,
-            temperature=args.temperature * u.deg,
-            humidity=args.humidity,
+            temperature=args.temperature * u.deg_C,
             obswl=args.obswl * u.mm,
         )
     else:
@@ -522,14 +542,62 @@ def process_map(
 
 
 def append_result_tsv(
-    out_fname: str, row: Tuple[str, str, float, float, float, float]
+    out_fname: str, row: Tuple[str, str, float, float, float, float], params=None
 ) -> None:
-    # Metadata will be added to the header of the file
+    if params is None:
+        params = argparse.Namespace(
+            site_location=None,
+            site_code=None,
+            data_code=None,
+            site_lat=None,
+            site_lon=None,
+            site_height=None,
+            diameter=None,
+            frequency=None,
+            az_offset_bias=None,
+            el_offset_bias=None,
+            enable_refraction=False,
+            pressure=None,
+            temperature=None,
+            humidity=None,
+            obswl=None,
+            peak_frac=None,
+            central_power_frac=None,
+            algo=None,
+            config=None,
+        )
+    commit = _get_git_commit()
+    short = commit[:8] if commit != "unknown" else "unknown"
+    software_url = (
+        f"https://github.com/solaris-observatory/solaris-pointing/tree/{short}"
+    )
+
     md = Metadata(
-        location="MZS, Antarctica",
-        antenna_diameter_m=2.0,
-        frequency_ghz=100,
-        software_version="2025.08.05",
+        site_location=params.site_location,
+        site_code=params.site_code,
+        data_code=params.data_code,
+        site_lat=params.site_lat,
+        site_lon=params.site_lon,
+        site_height=params.site_height,
+        antenna_diameter_m=params.diameter,
+        frequency_ghz=params.frequency,
+        az_offset_bias=params.az_offset_bias,
+        el_offset_bias=params.el_offset_bias,
+        refraction=("enabled" if params.enable_refraction else "disabled"),
+        algo=params.algo,
+        # Atmospheric parameters
+        pressure_hpa=params.pressure,
+        temperature_c=params.temperature,
+        humidity_frac=params.humidity,
+        obswl_mm=params.obswl,
+        # Algorithm thresholds
+        peak_frac=params.peak_frac,
+        central_power_frac=params.central_power_frac,
+        # Provenance
+        software_url=software_url,
+        software_commit=commit,
+        config_file=(params.config if hasattr(params, "config") else None),
+        created_at_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
     map_id, timestamp, az, el, offset_az, offset_el = row
@@ -546,4 +614,5 @@ def append_result_tsv(
             humidity_frac=None,
         )
     ]
+
     write_offsets_tsv(out_fname, md, record, append=True)
