@@ -26,6 +26,7 @@ Key features
 - Automatically extract the site data code from each <map_id>.
 - Optional inclusive date filters: --date-start / --date-end.
 - Pass-through site/refraction parameters for AltAz construction (when enabled).
+- Select the signal column in multi-signal .sky files via --signal.
 - Append all results to a single TSV named <algo>.tsv under --outdir.
 - Progress line per map: `[OK] MM/N: <map_id> -> appended to <algo>.tsv`.
 - Display the docstring usage examples with `--examples`.
@@ -95,6 +96,11 @@ Command-line usage examples
     python scripts/generate_offsets.py --examples
 
 12) Use a configuration profile from config/<name>.toml:
+
+13) Select a specific signal column from multi-signal .sky files:
+    python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+        --signal 1
+
     python scripts/generate_offsets.py --algo sun_maps \
         --config mzs \
         --data scans/
@@ -120,6 +126,11 @@ Parameters (selected)
 --frequency (GHz)             Observing frequency.
 --diameter (m)                Telescope diameter.
 
+--signal (int)                Select which SignalN column to use in .sky when
+                              multiple are present. Example: --signal 0 uses
+                              'Signal0', --signal 1 uses 'Signal1'. If omitted,
+                              defaults to 'Signal' if present, otherwise 'Signal0'.
+
 --enable-refraction           Enable atmospheric refraction.
 --pressure / --temperature    Meteo parameters (used only with refraction).
 --humidity (0..1)             Relative humidity (fraction).
@@ -138,6 +149,7 @@ Notes
 - Excluded stems (rule `T\\d{6}b`) are never processed.
 - The site data code is derived from each <map_id> and passed through to the
   algorithm as part of the metadata context.
+- The --signal option is forwarded to the algorithm as params.signal.
 - Results are appended incrementally; each `[OK]` line indicates a successful
   append for the current map.
 - The `--examples` option is processed before any discovery or computation.
@@ -244,6 +256,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Telescope diameter in meters.",
+    )
+    p.add_argument(
+        "--signal",
+        type=int,
+        default=None,
+        help=(
+            "Select which signal column to use in .sky when multiple are present. "
+            "Example: --signal 0 uses 'Signal0', --signal 1 uses 'Signal1'. "
+            "If omitted, defaults to 'Signal' if present, otherwise 'Signal0'."
+        ),
     )
     p.add_argument(
         "--az-offset-bias",
@@ -501,6 +523,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         site_code=args.site_code,
         frequency=args.frequency,
         diameter=args.diameter,
+        signal=args.signal,
         az_offset_bias=args.az_offset_bias,
         el_offset_bias=args.el_offset_bias,
         peak_frac=args.peak_frac,

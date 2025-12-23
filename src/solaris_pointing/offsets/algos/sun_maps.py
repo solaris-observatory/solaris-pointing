@@ -147,6 +147,7 @@ Possible extensions
 """
 
 import os
+import re
 import glob
 import csv
 import argparse
@@ -205,23 +206,26 @@ def parse_iso_utc(s: str) -> datetime:
 def read_path_file(path_fname: str) -> List[PathRow]:
     out: List[PathRow] = []
     with open(path_fname, "r", newline="") as f:
-        r = csv.reader(f, delimiter="\t")
-        header = next(f, None)  # raw header line
-        if header is None:
+        header = f.readline()
+        if not header:
             return out
-        # Use csv reader again to parse after header
-        f.seek(len(header))
-        r = csv.reader(f, delimiter="\t")
-        # robust: locate columns by name
-        header_cols = header.strip().split("\t")
+
+        # Robust header parsing: split on any whitespace (tabs, spaces, or mix)
+        header_cols = [h.strip() for h in re.split(r"\s+", header.strip()) if h.strip()]
         name_to_idx = {name: i for i, name in enumerate(header_cols)}
+
+        # Required columns
         idx_utc = name_to_idx["UTC"]
         idx_az = name_to_idx["Azimuth"]
         idx_el = name_to_idx["Elevation"]
         idx_f0 = name_to_idx["F0"]
-        for row in r:
-            if not row:
+
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
+
+            row = re.split(r"\s+", line)
             try:
                 t = parse_iso_utc(row[idx_utc])
                 az = float(row[idx_az])
@@ -229,32 +233,69 @@ def read_path_file(path_fname: str) -> List[PathRow]:
                 f0 = int(row[idx_f0])
                 out.append(PathRow(t, az, el, f0))
             except Exception:
+                # Skip malformed rows
                 continue
+
     return out
 
 
-def read_sky_file(sky_fname: str) -> List[SkyRow]:
+def read_sky_file(sky_fname: str, args: argparse.Namespace) -> List[SkyRow]:
     out: List[SkyRow] = []
     with open(sky_fname, "r", newline="") as f:
-        r = csv.reader(f, delimiter="\t")
-        header = next(f, None)
-        if header is None:
+        header = f.readline()
+        if not header:
             return out
-        f.seek(len(header))
-        r = csv.reader(f, delimiter="\t")
-        header_cols = header.strip().split("\t")
+
+        # Robust header parsing: split on any whitespace (tabs, spaces, or mix)
+        header_cols = [h.strip() for h in re.split(r"\s+", header.strip()) if h.strip()]
         name_to_idx = {name: i for i, name in enumerate(header_cols)}
+
+        # UTC column is mandatory
+        if "UTC" not in name_to_idx:
+            raise ValueError(f"[sky] Missing required column 'UTC' in {sky_fname}")
         idx_utc = name_to_idx["UTC"]
-        idx_sig = name_to_idx["Signal"]
-        for row in r:
-            if not row:
+
+        # Signal column selection
+        # - If args.signal is provided: use Signal{N}
+        # - Otherwise: use 'Signal' if present, fallback to 'Signal0'
+        sig_sel = getattr(args, "signal", None)
+        if sig_sel is not None:
+            sig_col = f"Signal{sig_sel}"
+            if sig_col not in name_to_idx:
+                available = [c for c in header_cols if c.startswith("Signal")]
+                raise ValueError(
+                    f"[sky] Requested {sig_col} via --signal {sig_sel}, "
+                    f"but it does not exist in {sky_fname}. "
+                    f"Available: {available if available else '(none)'}"
+                )
+            idx_sig = name_to_idx[sig_col]
+        else:
+            if "Signal" in name_to_idx:
+                idx_sig = name_to_idx["Signal"]
+            elif "Signal0" in name_to_idx:
+                idx_sig = name_to_idx["Signal0"]
+            else:
+                available = [c for c in header_cols if c.startswith("Signal")]
+                raise ValueError(
+                    f"[sky] No usable signal column found in {sky_fname}. "
+                    f"Expected 'Signal' or 'Signal0'. "
+                    f"Available: {available if available else '(none)'}"
+                )
+
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
+
+            row = re.split(r"\s+", line)
             try:
                 t = parse_iso_utc(row[idx_utc])
                 s = float(row[idx_sig])
                 out.append(SkyRow(t, s))
             except Exception:
+                # Skip malformed rows
                 continue
+
     return out
 
 
@@ -498,7 +539,7 @@ def process_map(
       - compute ephemerides with Astropy; return offsets
     """
     path_rows = read_path_file(path_fname)
-    sky_rows = read_sky_file(sky_fname)
+    sky_rows = read_sky_file(sky_fname, args)
     if not path_rows or not sky_rows:
         return None
 

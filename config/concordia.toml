@@ -10,10 +10,10 @@
 # Site information
 # ---------------------------
 site-location = "Antarctica"
-site-code = "MZS"
-site-lat = -74.6950
-site-lon = 164.1000
-site-height = 64
+site-code = "DC"
+site-lat = -75.1000
+site-lon = 123.3300
+site-height = 3233
 
 # ---------------------------
 # Telescope parameters
@@ -31,9 +31,9 @@ el-offset-bias = 0.0
 # Atmospheric model
 # ---------------------------
 enable-refraction = true
-pressure = 990
-temperature = -5
-humidity = 0.5
+pressure = 850
+temperature = -35
+humidity = 0.2
 obswl = 3.0
 
 # ---------------------------

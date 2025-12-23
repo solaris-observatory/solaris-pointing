@@ -472,7 +472,10 @@ def _fit_linear_ridge(
     )
     XT_X = X.T @ X
     if alpha > 0:
-        XT_X = XT_X + float(alpha) * np.eye(XT_X.shape[0])
+        # Do not regularize the intercept (first column is the constant 1)
+        R = float(alpha) * np.eye(XT_X.shape[0])
+        R[0, 0] = 0.0
+        XT_X = XT_X + R
     coef = np.linalg.solve(XT_X, X.T @ y)
 
     # Back-compat: return Polynomial ONLY when basis == pure polynomial
