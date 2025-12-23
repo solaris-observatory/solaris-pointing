@@ -13,7 +13,7 @@ site-location = "Antarctica"
 site-code = "MZS"
 site-lat = -74.6950
 site-lon = 164.1000
-site-height = 30
+site-height = 64
 
 # ---------------------------
 # Telescope parameters

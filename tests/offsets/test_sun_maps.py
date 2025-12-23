@@ -376,7 +376,7 @@ def test_readers_skip_bad_rows_more_cases(sun_maps, tmp_path):
     assert pr.az_deg == 10.0
     assert pr.el_deg == 20.0
 
-    sky_rows = sm.read_sky_file(str(bad_sky))
+    sky_rows = sm.read_sky_file(str(bad_sky), Namespace())
     assert len(sky_rows) == 1
     sr = sky_rows[0]
     assert sr.signal == 11.0
@@ -486,7 +486,7 @@ def test_read_sky_file_header_none_and_empty_rows(sun_maps, tmp_path):
     # Case 1: completely empty file -> header is None -> early return
     empty = d / "empty.sky"
     empty.write_text("", encoding="utf-8")
-    rows_empty = sm.read_sky_file(str(empty))
+    rows_empty = sm.read_sky_file(str(empty), Namespace())
     assert rows_empty == []
 
     # Case 2: normal header with a completely empty data row
@@ -495,9 +495,85 @@ def test_read_sky_file_header_none_and_empty_rows(sun_maps, tmp_path):
         "UTC\tSignal\n\n2025-01-01T00:00:00.000Z\t5.0\n",
         encoding="utf-8",
     )
-    rows = sm.read_sky_file(str(with_empty))
+    rows = sm.read_sky_file(str(with_empty), Namespace())
     assert len(rows) == 1
     assert rows[0].signal == 5.0
+
+
+def test_read_sky_file_missing_utc_column_raises(sun_maps, tmp_path):
+    """Ensure read_sky_file raises when the mandatory UTC column is missing."""
+    sm, _ = sun_maps
+    p = tmp_path / "missing_utc.sky"
+    p.write_text(
+        "Time\tSignal\n2025-01-01T00:00:00.000Z\t1.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as ex:
+        sm.read_sky_file(str(p), Namespace())
+    assert "Missing required column 'UTC'" in str(ex.value)
+
+
+def test_read_sky_file_default_falls_back_to_signal0(sun_maps, tmp_path):
+    """If 'Signal' is absent, the reader must fall back to 'Signal0'."""
+    sm, _ = sun_maps
+    p = tmp_path / "signal0_only.sky"
+    p.write_text(
+        "UTC\tSignal0\n2025-01-01T00:00:00.000Z\t42.0\n",
+        encoding="utf-8",
+    )
+
+    rows = sm.read_sky_file(str(p), Namespace())
+    assert len(rows) == 1
+    assert rows[0].signal == 42.0
+
+
+def test_read_sky_file_selects_requested_signal_column(sun_maps, tmp_path):
+    """If args.signal is set, the reader must use the corresponding SignalN column."""
+    sm, _ = sun_maps
+    p = tmp_path / "multi_signal.sky"
+    # Mix whitespace to exercise robust header parsing (spaces, not only tabs).
+    p.write_text(
+        "UTC   Signal0   Signal1\n2025-01-01T00:00:00.000Z   1.0   99.0\n",
+        encoding="utf-8",
+    )
+
+    rows = sm.read_sky_file(str(p), Namespace(signal=1))
+    assert len(rows) == 1
+    assert rows[0].signal == 99.0
+
+
+def test_read_sky_file_requested_signal_missing_raises(sun_maps, tmp_path):
+    """If args.signal requests a non-existent SignalN column, raise with
+    available Signal* columns."""
+    sm, _ = sun_maps
+    p = tmp_path / "only_signal0.sky"
+    p.write_text(
+        "UTC\tSignal0\n2025-01-01T00:00:00.000Z\t5.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as ex:
+        sm.read_sky_file(str(p), Namespace(signal=2))
+    msg = str(ex.value)
+    assert "Requested Signal2" in msg
+    assert "Available" in msg
+    assert "Signal0" in msg
+
+
+def test_read_sky_file_no_usable_signal_column_raises(sun_maps, tmp_path):
+    """If no signal column is found, raise a helpful error."""
+    sm, _ = sun_maps
+    p = tmp_path / "no_signal_column.sky"
+    p.write_text(
+        "UTC\tPower\n2025-01-01T00:00:00.000Z\t123.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as ex:
+        sm.read_sky_file(str(p), Namespace())
+    msg = str(ex.value)
+    assert "No usable signal column" in msg
 
 
 def test_choose_scan_centroid_denominator_zero_fallback(sun_maps):
