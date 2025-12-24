@@ -586,12 +586,26 @@ def main(argv: Optional[list[str]] = None) -> None:
     # -----------------------------
     # Discovery helpers
     # -----------------------------
+
     def _discover_pairs_recursive(root: Path):
         """
-        Recursively find (.path, .sky) pairs under `root`, excluding names that
-        contain a 'b' immediately after the time component.
-        Optionally filter by inclusive dates using args.date_start / args.date_end,
-        where the date is parsed from the stem prefix 'YYMMDDTHHMMSS...'.
+        Recursively find (.path, .sky) pairs under `root`.
+
+        Pairing rule (starting from each .sky):
+        - Let `base` be the .sky stem
+          (e.g., 251219T040038_ROSA for 251219T040038_ROSA.sky).
+        - Find all .path files (any subdirectory) whose *filename stem*
+          starts with `base`.
+        - If exactly 1 candidate exists, use it.
+        - If exactly 2 candidates exist, use the one whose filename is exactly
+          f"{base}_offset.path" (stem == f"{base}_offset").
+        - Otherwise (0, >2), raise a clear error.
+
+        Exclude any name that contains a 'b' immediately after the time component
+        (pattern: T\\d{6}b). Optionally filter by inclusive dates using
+        args.date_start / args.date_end, where the date is parsed from the stem
+        prefix 'YYMMDDTHHMMSS...'.
+
         Returns a list of tuples: (map_id, path_file, sky_file).
         """
         time_b_pat = re.compile(r"T\d{6}b")  # e.g., 250101T195415bOASI
@@ -610,26 +624,36 @@ def main(argv: Optional[list[str]] = None) -> None:
 
             return _date(year, int(m.group("mo")), int(m.group("dd")))
 
-        path_files = {}
-        sky_files = {}
-
+        # Collect all .path and .sky under root (exclude "Txxxxxxb" names)
+        path_entries = []
         for pth in root.rglob("*.path"):
-            name = pth.stem
-            if time_b_pat.search(name):
+            stem = pth.stem
+            if time_b_pat.search(stem):
                 continue
-            path_files[name] = pth
+            path_entries.append((stem, pth))
 
+        sky_entries = []
         for sky in root.rglob("*.sky"):
-            name = sky.stem
-            if time_b_pat.search(name):
+            base = sky.stem
+            if time_b_pat.search(base):
                 continue
-            sky_files[name] = sky
+            sky_entries.append((base, sky))
+
+        # Deterministic order
+        path_entries.sort(key=lambda x: x[0])
+        sky_entries.sort(key=lambda x: x[0])
+
+        def _rel(p: Path) -> str:
+            try:
+                return str(p.relative_to(root))
+            except Exception:
+                return str(p)
 
         pairs = []
-        for stem in sorted(set(path_files) & set(sky_files)):
+        for base, sky in sky_entries:
             # Date filter (inclusive): only apply if at least one bound is given
             if args.date_start is not None or args.date_end is not None:
-                d = _stem_date(stem)
+                d = _stem_date(base)
                 if d is None:
                     # If no date can be parsed, exclude when a filter is requested
                     continue
@@ -637,8 +661,53 @@ def main(argv: Optional[list[str]] = None) -> None:
                     continue
                 if args.date_end is not None and d > args.date_end:
                     continue
-            map_id = stem  # e.g., 250101T195415_OASI
-            pairs.append((map_id, str(path_files[stem]), str(sky_files[stem])))
+
+            candidates = [(s, p) for (s, p) in path_entries if s.startswith(base)]
+
+            if len(candidates) == 0:
+                raise ValueError(
+                    "No .path file found for .sky base.\n"
+                    f"  root: {root}\n"
+                    f"  sky:  {_rel(sky)}\n"
+                    f"  base: {base}\n"
+                    "  rule: expected 1 or 2 .path files "
+                    "whose filename starts with base"
+                )
+
+            if len(candidates) == 1:
+                chosen_stem, chosen_path = candidates[0]
+            elif len(candidates) == 2:
+                expected_stem = f"{base}_offset"
+                matches = [(s, p) for (s, p) in candidates if s == expected_stem]
+                if len(matches) != 1:
+                    found_list = "\n".join(f"    - {_rel(p)}" for _, p in candidates)
+                    raise ValueError(
+                        "Ambiguous .path candidates (2 found), but the required "
+                        "offset filename is missing.\n"
+                        f"  root: {root}\n"
+                        f"  sky:  {_rel(sky)}\n"
+                        f"  base: {base}\n"
+                        f"  expected: {expected_stem}.path\n"
+                        "  found:\n"
+                        f"{found_list}"
+                    )
+                chosen_stem, chosen_path = matches[0]
+            else:
+                found_list = "\n".join(f"    - {_rel(p)}" for _, p in candidates)
+                raise ValueError(
+                    "Ambiguous .path candidates (>2 found) for a single .sky base.\n"
+                    f"  root: {root}\n"
+                    f"  sky:  {_rel(sky)}\n"
+                    f"  base: {base}\n"
+                    "  rule: expected 1 or 2 .path files whose "
+                    "filename starts with base\n"
+                    "  found:\n"
+                    f"{found_list}"
+                )
+
+            map_id = base  # e.g., 250101T195415_OASI
+            pairs.append((map_id, str(chosen_path), str(sky)))
+
         return pairs
 
     # -----------------------------
