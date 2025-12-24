@@ -384,3 +384,193 @@ def test_examples_option_outputs_docstring_section(tmp_path: Path, monkeypatch):
     assert "--data" in out or "--algo" in out, (
         "Example body should include CLI switches"
     )
+
+
+def _write_fake_algo_with_path_basename(root: Path) -> None:
+    """
+    Fake algorithm that writes both map_id and the basename of the chosen .path.
+    This lets us verify the discovery picks <base>_offset.path when two candidates
+    exist.
+    """
+    pkg = root / "src" / "solaris_pointing" / "offsets" / "algos"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (root / "src" / "solaris_pointing" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "src" / "solaris_pointing" / "offsets" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (
+        root / "src" / "solaris_pointing" / "offsets" / "algos" / "__init__.py"
+    ).write_text("", encoding="utf-8")
+
+    code = [
+        "from pathlib import Path",
+        "",
+        "def process_map(map_id, path_fname, sky_fname, params):",
+        "    return {'id': map_id, 'path': str(path_fname), 'sky': str(sky_fname)}",
+        "",
+        "def append_result_tsv(out_path, res, params=None):",
+        "    with open(out_path, 'a', encoding='utf-8') as f:",
+        "        f.write(res['id'] + '\\t' + Path(res['path']).name + '\\n')",
+        "",
+    ]
+    (pkg / "sun_maps.py").write_text("\n".join(code), encoding="utf-8")
+
+
+def test_two_path_candidates_choose_offset(tmp_path: Path):
+    _write_fake_algo_with_path_basename(tmp_path)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path / "src")
+
+    scans = tmp_path / "scans"
+    a = scans / "A"
+    b = scans / "B"
+    a.mkdir(parents=True, exist_ok=True)
+    b.mkdir(parents=True, exist_ok=True)
+
+    base = "251219T040038_ROSA"
+
+    # One .sky
+    (a / f"{base}.sky").write_text("x\n", encoding="utf-8")
+
+    # Two candidate .path files, possibly in different subdirectories
+    (a / f"{base}.path").write_text("x\n", encoding="utf-8")
+    (b / f"{base}_offset.path").write_text("x\n", encoding="utf-8")
+
+    cp = subprocess.run(
+        [
+            _python_exe(),
+            str(_script_path()),
+            "--data",
+            str(scans),
+            "--algo",
+            "sun_maps",
+            "--outdir",
+            str(tmp_path / "out_offset_pick"),
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert cp.returncode == 0, f"STDERR:\n{cp.stderr}"
+
+    out_tsv = tmp_path / "out_offset_pick" / "sun_maps.tsv"
+    line = out_tsv.read_text(encoding="utf-8").strip()
+    map_id, chosen_path_basename = line.split("\t")
+    assert map_id == base
+    assert chosen_path_basename == f"{base}_offset.path"
+
+
+def test_sky_without_any_matching_path_is_error(tmp_path: Path):
+    _write_fake_algo(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path / "src")
+
+    scans = tmp_path / "scans"
+    scans.mkdir(parents=True, exist_ok=True)
+
+    base = "251219T040038_ROSA"
+    (scans / f"{base}.sky").write_text("x\n", encoding="utf-8")
+
+    cp = subprocess.run(
+        [
+            _python_exe(),
+            str(_script_path()),
+            "--data",
+            str(scans),
+            "--algo",
+            "sun_maps",
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert cp.returncode != 0
+    assert "No .path file found for .sky base" in (cp.stderr + cp.stdout)
+
+
+def test_two_candidates_missing_exact_offset_is_error(tmp_path: Path):
+    _write_fake_algo(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path / "src")
+
+    scans = tmp_path / "scans"
+    d1 = scans / "D1"
+    d2 = scans / "D2"
+    d1.mkdir(parents=True, exist_ok=True)
+    d2.mkdir(parents=True, exist_ok=True)
+
+    base = "251219T040038_ROSA"
+    (d1 / f"{base}.sky").write_text("x\n", encoding="utf-8")
+
+    # Two candidates that start with base, but no exact "<base>_offset.path"
+    (d1 / f"{base}.path").write_text("x\n", encoding="utf-8")
+    (d2 / f"{base}_extra.path").write_text("x\n", encoding="utf-8")
+
+    cp = subprocess.run(
+        [
+            _python_exe(),
+            str(_script_path()),
+            "--data",
+            str(scans),
+            "--algo",
+            "sun_maps",
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert cp.returncode != 0
+    out = cp.stderr + cp.stdout
+    assert "Ambiguous .path candidates (2 found)" in out
+    assert f"expected: {base}_offset.path" in out
+
+
+def test_more_than_two_candidates_is_error(tmp_path: Path):
+    _write_fake_algo(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path / "src")
+
+    scans = tmp_path / "scans"
+    d1 = scans / "D1"
+    d2 = scans / "D2"
+    d3 = scans / "D3"
+    d1.mkdir(parents=True, exist_ok=True)
+    d2.mkdir(parents=True, exist_ok=True)
+    d3.mkdir(parents=True, exist_ok=True)
+
+    base = "251219T040038_ROSA"
+    (d1 / f"{base}.sky").write_text("x\n", encoding="utf-8")
+
+    # Three candidates that start with base
+    (d1 / f"{base}.path").write_text("x\n", encoding="utf-8")
+    (d2 / f"{base}_offset.path").write_text("x\n", encoding="utf-8")
+    (d3 / f"{base}_whatever.path").write_text("x\n", encoding="utf-8")
+
+    cp = subprocess.run(
+        [
+            _python_exe(),
+            str(_script_path()),
+            "--data",
+            str(scans),
+            "--algo",
+            "sun_maps",
+        ],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    assert cp.returncode != 0
+    assert "Ambiguous .path candidates (>2 found)" in (cp.stderr + cp.stdout)

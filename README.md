@@ -1,278 +1,997 @@
 # Solaris Pointing
-![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)![Coverage Status](https://coveralls.io/repos/github/solaris-observatory/solaris-pointing/badge.svg?branch=main)
 
-# Solaris Pointing
-
-Solaris Pointing provides command-line tools to **compute solar pointing offsets** from Sun scan maps and to **fit azimuth/elevation pointing models** (polynomial + Fourier).  
-It is designed for telescope operations, diagnostics, and production of stable correction models used at millimetric observatories.
-
-This repository exposes **two user-facing CLIs**:
-
-- `generate_offsets.py` — discover Sun scan pairs, compute offset time series, and write a clean TSV.
-- `generate_model.py` — fit pointing models (AZ/EL), generate summaries and plots, and produce ready-to-use `.joblib` bundles.
-
-Both scripts include comprehensive built-in `--examples`.
+[![CI](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml/badge.svg)](https://github.com/solaris-observatory/solaris-pointing/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/solaris-observatory/solaris-pointing/badge.svg?branch=main)](https://coveralls.io/github/solaris-observatory/solaris-pointing?branch=main)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-## Quickstart
+## Overview
 
-### 1) Compute offsets from Sun scans
+**Solaris Pointing** is a comprehensive Python toolkit for telescope pointing analysis and correction at millimetric observatories. It provides command-line tools and a Python API to:
 
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps
-```
+- **Compute solar pointing offsets** from Sun scan maps (`.path` + `.sky` pairs)
+- **Fit azimuth/elevation pointing models** (polynomial + Fourier harmonics)
+- **Generate production-ready correction models** for telescope operations
+- **Support multiple algorithms** for offset computation with pluggable architecture
 
-This produces:
-
-```
-offsets/
-└── sun_maps.tsv
-```
-
-Each line contains `azimuth`, `offset_az`, `offset_el`, metadata, and algorithm-specific fields.
+The package is designed for operational use in solar radio astronomy, particularly for 100 GHz observations requiring precise pointing calibration.
 
 ---
 
+## Table of Contents
 
-### Using a configuration profile
-
-```bash
-python scripts/generate_offsets.py --algo sun_maps --config <profile> --data scans/
-```
-
-Profiles are loaded from `config/<profile>.toml` and override default CLI parameters.
-### 2) Fit pointing models from one or more TSV files
-
-```bash
-python scripts/generate_model.py fit offsets/sun_maps.tsv
-```
-
-This writes per-axis models, summaries, and plots:
-
-```
-models/
-├── sun_maps_az.joblib
-├── sun_maps_el.joblib
-├── sun_maps_summary_az.txt
-├── sun_maps_summary_el.txt
-├── sun_maps_az.png
-├── sun_maps_el.png
-└── sun_maps.joblib
-```
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Command-Line Tools](#command-line-tools)
+  - [generate_offsets.py](#1-generate_offsetspy)
+  - [generate_model.py](#2-generate_modelpy)
+- [Configuration Profiles](#configuration-profiles)
+- [Input Data Format](#input-data-format)
+- [Output Files](#output-files)
+- [Python API Usage](#python-api-usage)
+- [Testing](#testing)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ---
 
-## What this package provides
+## Features
 
-- **Offset computation** from raw Sun scans (`.path` + `.sky` pairs), including:
-  - recursive scan discovery;
-  - date filtering via stem timestamps: `YYMMDDTHHMMSS...`;
-  - atmospheric refraction (optional);
-  - telescope & site metadata;
-  - power/peak selection thresholds.
+### Offset Computation (`generate_offsets.py`)
 
-- **Pointing-model fitting** with:
-  - polynomial degree `--degree`;
-  - MAD-based outlier rejection (`--zscore`);
-  - ridge regularization (`--ridge-alpha`);
-  - Fourier terms (`--fourier-k`);
-  - custom periods (`--periods-deg`);
-  - per-axis or unified fits;
-  - auto-generated Python function for each axis (included in summaries).
+- ✅ **Recursive scan discovery** driven by `.sky`, pairing `.path` by filename prefix
+  (`<base>*.path`) with `<base>_offset.path` preferred when two candidates exist
+- ✅ **Date-based filtering** via stem timestamps (`YYMMDDTHHMMSS`)
+- ✅ **Atmospheric refraction correction** (optional, via `pysolar`)
+- ✅ **Multi-signal support** for `.sky` files with multiple detector channels
+- ✅ **Site and telescope metadata** integration
+- ✅ **Configurable thresholds** for peak/power selection
+- ✅ **Fixed bias application** for systematic offset correction
+- ✅ **Configuration profiles** via TOML files
 
-- **Model prediction** at arbitrary azimuths.
+### Model Fitting (`generate_model.py`)
 
-- **Model merging** to create unified bundles.
+- ✅ **Polynomial models** with adjustable degree
+- ✅ **Fourier harmonics** with custom periods
+- ✅ **MAD-based outlier rejection** with configurable z-score threshold
+- ✅ **Ridge regularization** (L2) for stable fits
+- ✅ **Per-axis or unified fits** (AZ, EL, or both)
+- ✅ **Model prediction** at arbitrary azimuths
+- ✅ **Model merging** for unified bundles
+- ✅ **Auto-generated Python functions** for each fitted model
+- ✅ **Comprehensive plots and summaries** with multiple unit support
 
----
+### Data Pipeline Support
 
-# Examples
-
-## 1) `generate_offsets.py`
-
-### Minimal run
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps
-```
-
-### Date filters
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-start 2025-01-01
-python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-end 2025-01-02
-python scripts/generate_offsets.py --data scans/ --algo sun_maps --date-start 2025-01-01 --date-end 2025-01-03
-```
-
-### Observatory metadata
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps     --site-location "Antarctica" --site-code MZS     --site-lat -74.6950 --site-lon 164.1000 --site-height 30
-```
-
-### Telescope parameters
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps     --frequency 100 --diameter 2.0
-```
-
-### Atmospheric refraction
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps     --enable-refraction --pressure 990 --temperature -5 --humidity 0.5 --obswl 3.0
-```
-
-### Biases
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps     --az-offset-bias 0.10 --el-offset-bias -0.05
-```
-
-### Custom output directory
-
-```bash
-python scripts/generate_offsets.py --data scans/ --algo sun_maps --outdir offsets_run_42
-```
+- ✅ **TSV format** for portable, human-readable offset tables
+- ✅ **Joblib serialization** for efficient model storage
+- ✅ **Metadata tracking** via JSON sidecars
+- ✅ **Incremental processing** with progress indicators
+- ✅ **Reproducible workflows** via configuration management
 
 ---
 
-## 2) `generate_model.py`
+## Requirements
 
-### Minimal fit
+### Python Version
 
-```bash
-python scripts/generate_model.py fit offsets/sun_maps.tsv
-```
-
-### Polynomial + Fourier
-
-```bash
-python scripts/generate_model.py fit scans.tsv     --degree 3 --zscore 2.5 --fourier-k 2 --plot-unit arcmin
-```
-
-### Axis selection
-
-```bash
-python scripts/generate_model.py fit input.tsv --az --degree 3 --fourier-k 1
-python scripts/generate_model.py fit input.tsv --el --degree 3 --fourier-k 1
-```
-
-### Multiple TSVs
-
-```bash
-python scripts/generate_model.py fit a.tsv b.tsv --degree 2 --zscore 2.0
-```
-
-### Input offset units
-
-```bash
-python scripts/generate_model.py fit offsets.tsv --input-offset-unit arcsec
-```
-
-### Predict offsets
-
-```bash
-python scripts/generate_model.py predict sun_maps --azimuth 12.0 --unit arcsec
-python scripts/generate_model.py predict sun_maps --az --azimuth 45.0 --unit arcmin
-python scripts/generate_model.py predict sun_maps --el --azimuth 45.0 --unit arcmin
-python scripts/generate_model.py predict sun_maps --az --azimuth 355.0 --allow-extrapolation
-```
-
-### Merge models
-
-```bash
-python scripts/generate_model.py merge sun_maps
-```
+- **Python 3.12 or higher** (tested on 3.12 and 3.13)
 
 ---
 
-# Installation
+## Installation
 
-## With Poetry
+### Method 1: Poetry (Recommended)
 
 ```bash
+# Clone the repository
+git clone https://github.com/solaris-observatory/solaris-pointing.git
+cd solaris-pointing
+
+# Install with Poetry
 poetry install
+
+# Activate the virtual environment
 poetry shell
 ```
 
-## With pip
-
-Runtime-only:
+### Method 2: pip (Runtime Only)
 
 ```bash
+# Clone the repository
+git clone https://github.com/solaris-observatory/solaris-pointing.git
+cd solaris-pointing
+
+# Install runtime dependencies
 pip install -r requirements.txt
+
+# Install the package in development mode
+pip install -e .
 ```
 
-Development:
+### Method 3: pip (With Development Tools)
 
 ```bash
+# Install all dependencies including testing/docs
 pip install -r requirements-dev.txt
+pip install -e .
 ```
 
----
-
-# Repository structure
-
-```
-scripts/
-src/solaris_pointing/
-models/
-offsets/
-tests/
-```
-
----
-
-# License
-
-MIT License.
-
----
-
-# Configuration profiles (`--config`)
-
-`generate_offsets.py` supports loading configuration profiles from `config/<name>.toml`.
-
-A profile lets you store site parameters, telescope metadata, refraction settings,
-biases, thresholds, and any other CLI option — without typing long commands every time.
-
-## Usage
+### Verify Installation
 
 ```bash
-python scripts/generate_offsets.py --algo sun_maps --config mzs_default --data scans/
+# Test the CLI tools
+python scripts/generate_offsets.py --examples
+python scripts/generate_model.py --examples
+
+# Run the test suite
+pytest
 ```
 
-This loads:
+---
 
+## Quick Start
+
+### 1. Compute Offsets from Sun Scans
+
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps
 ```
-config/mzs_default.toml
+
+**Output:** `offsets/sun_maps.tsv`
+
+Each row contains: `azimuth`, `offset_az`, `offset_el`, plus algorithm-specific metadata.
+
+### 2. Fit Pointing Models
+
+```bash
+python scripts/generate_model.py fit offsets/sun_maps.tsv
 ```
 
-All keys in the TOML file override the default CLI parameters.
-Unknown keys trigger a non-blocking warning.
+**Output:**
+```
+models/
+├── sun_maps_az.joblib         # Azimuth model
+├── sun_maps_el.joblib         # Elevation model
+├── sun_maps_summary_az.txt    # AZ fit summary + Python code
+├── sun_maps_summary_el.txt    # EL fit summary + Python code
+├── sun_maps_summary.txt       # General summary
+├── sun_maps_az.png            # AZ residual plot
+├── sun_maps_el.png            # EL residual plot
+└── sun_maps.joblib            # Unified bundle
+```
 
-## Example TOML profile
+### 3. Predict Offsets
+
+```bash
+python scripts/generate_model.py predict sun_maps --azimuth 45.0 --unit arcmin
+```
+
+**Output:** Predicted azimuth and elevation offsets at 45° azimuth.
+
+---
+
+## Command-Line Tools
+
+### 1. `generate_offsets.py`
+
+**Purpose:** Discover Sun scan pairs, compute pointing offsets, and write TSV results.
+
+#### Basic Usage
+
+```bash
+python scripts/generate_offsets.py --data <scan_directory> --algo <algorithm_name>
+```
+
+#### Key Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--algo` | str | Algorithm name (e.g., `sun_maps`) |
+| `--data` | path | Root directory for scan discovery |
+| `--outdir` | path | Output directory (default: `./offsets`) |
+| `--date-start` | YYYY-MM-DD | Filter: inclusive start date |
+| `--date-end` | YYYY-MM-DD | Filter: inclusive end date |
+| `--signal` | int | Select signal column (0, 1, etc.) |
+| `--config` | str | Load TOML profile from `config/<name>.toml` |
+| `--examples` | flag | Show usage examples and exit |
+
+#### Site Parameters
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--site-lat` | float | -74.6950 | Latitude (degrees) |
+| `--site-lon` | float | 164.1000 | Longitude (degrees) |
+| `--site-height` | float | 30.0 | Altitude (meters) |
+| `--site-location` | str | "Unknown" | Location name |
+| `--site-code` | str | "Unknown" | Short site code |
+
+#### Telescope Parameters
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--frequency` | float | 100.0 | Frequency (GHz) |
+| `--diameter` | float | 2.6 | Diameter (meters) |
+
+#### Refraction Parameters
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--enable-refraction` | flag | False | Enable atmospheric correction |
+| `--pressure` | float | 1013.25 | Pressure (hPa) |
+| `--temperature` | float | 15.0 | Temperature (°C) |
+| `--humidity` | float | 0.5 | Relative humidity (0-1) |
+| `--obswl` | float | 3.0 | Wavelength (mm) |
+
+#### Offset Biases
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--az-offset-bias` | float | 0.0 | AZ bias (degrees) |
+| `--el-offset-bias` | float | 0.0 | EL bias (degrees) |
+
+#### Examples
+
+**Minimal run:**
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps
+```
+
+**With date filters:**
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+    --date-start 2025-01-01 --date-end 2025-01-31
+```
+
+**With refraction and site parameters:**
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps \
+    --site-location "Antarctica" --site-code MZS \
+    --site-lat -74.6950 --site-lon 164.1000 --site-height 30 \
+    --enable-refraction --pressure 690 --temperature -7 --humidity 0.5
+```
+
+**Using a configuration profile:**
+```bash
+python scripts/generate_offsets.py --algo sun_maps --config mzs --data scans/
+python scripts/generate_offsets.py --algo sun_maps --config concordia --data scans/
+```
+
+**Multi-signal selection:**
+```bash
+python scripts/generate_offsets.py --data scans/ --algo sun_maps --signal 1
+```
+
+---
+
+### 2. `generate_model.py`
+
+**Purpose:** Fit, predict, and merge pointing-offset models.
+
+#### Subcommands
+
+```bash
+python scripts/generate_model.py {fit|predict|merge} [options]
+```
+
+#### Subcommand: `fit`
+
+Fit azimuth/elevation models from TSV offset data.
+
+**Basic usage:**
+```bash
+python scripts/generate_model.py fit <tsv_file> [options]
+```
+
+**Key options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--degree` | int | 3 | Polynomial degree |
+| `--zscore` | float | 2.5 | MAD outlier threshold |
+| `--ridge-alpha` | float | 0.0 | L2 regularization |
+| `--fourier-k` | int | 0 | Number of harmonics |
+| `--periods-deg` | str | - | Custom periods (comma-sep) |
+| `--az` | flag | - | Fit only AZ axis |
+| `--el` | flag | - | Fit only EL axis |
+| `--input-offset-unit` | str | deg | Input unit (deg/arcmin/arcsec) |
+| `--plot-unit` | str | deg | Plot unit (deg/arcmin/arcsec) |
+
+**Examples:**
+
+```bash
+# Minimal fit (both axes)
+python scripts/generate_model.py fit offsets/sun_maps.tsv
+
+# Custom polynomial + Fourier
+python scripts/generate_model.py fit offsets.tsv --degree 3 --fourier-k 2
+
+# Fit only azimuth
+python scripts/generate_model.py fit offsets.tsv --az --degree 3
+
+# Multiple input files
+python scripts/generate_model.py fit a.tsv b.tsv --degree 2
+
+# Arcsecond input data
+python scripts/generate_model.py fit offsets.tsv --input-offset-unit arcsec
+```
+
+#### Subcommand: `predict`
+
+Predict offsets at a given azimuth using saved models.
+
+**Basic usage:**
+```bash
+python scripts/generate_model.py predict <model_stem> --azimuth <value> [options]
+```
+
+**Key options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--azimuth` | float | Azimuth for prediction (degrees) |
+| `--unit` | str | Output unit (deg/arcmin/arcsec) |
+| `--az` | flag | Predict only AZ |
+| `--el` | flag | Predict only EL |
+| `--allow-extrapolation` | flag | Allow prediction outside data range |
+
+**Examples:**
+
+```bash
+# Predict both axes
+python scripts/generate_model.py predict sun_maps --azimuth 45.0 --unit arcmin
+
+# Predict only azimuth
+python scripts/generate_model.py predict sun_maps --az --azimuth 45.0
+
+# Allow extrapolation
+python scripts/generate_model.py predict sun_maps --azimuth 355.0 --allow-extrapolation
+```
+
+#### Subcommand: `merge`
+
+Merge per-axis models into a unified bundle.
+
+**Basic usage:**
+```bash
+python scripts/generate_model.py merge <model_stem>
+```
+
+**Example:**
+```bash
+python scripts/generate_model.py merge sun_maps
+# Reads: sun_maps_az.joblib, sun_maps_el.joblib
+# Writes: sun_maps.joblib
+```
+
+---
+
+## Configuration Profiles
+
+Configuration profiles allow you to store commonly-used parameters in TOML files, avoiding repetitive command-line arguments.
+
+### Creating a Profile
+
+Create a file `config/<profile_name>.toml`:
 
 ```toml
+# config/mzs.toml
+
+# ---------------------------
+# Site information
+# ---------------------------
 site-location = "Antarctica"
 site-code = "MZS"
 site-lat = -74.6950
 site-lon = 164.1000
-site-height = 30
+site-height = 64
 
+# ---------------------------
+# Telescope parameters
+# ---------------------------
+frequency = 100      # GHz
+diameter = 2.0       # meters
+
+# ---------------------------
+# Pointing offset biases
+# ---------------------------
+az-offset-bias = 0.0
+el-offset-bias = 0.0
+
+# ---------------------------
+# Atmospheric model
+# ---------------------------
 enable-refraction = true
-pressure = 690
-temperature = -7
+pressure = 990
+temperature = -5
 humidity = 0.5
 obswl = 3.0
 
-frequency = 100
-diameter = 2.0
+# ---------------------------
+# Selection thresholds
+# ---------------------------
+peak-frac = 0.75
+central-power-frac = 0.60
 
-az-offset-bias = 0.10
-el-offset-bias = -0.05
 ```
 
-Using profiles is recommended for observatory operations, where repeatability and
-clean reproducibility matter.
+### Using a Profile
+
+```bash
+python scripts/generate_offsets.py --algo sun_maps --config mzs --data scans/
+```
+
+**Note:** CLI arguments override profile values.
+
+---
+
+## Input Data Format
+
+### Scan Files
+
+Pairing is driven by the `.sky` file:
+
+- For each `<base>.sky` found under `--data` (searched recursively), the driver searches for
+  `.path` files whose *filename stem* starts with `<base>` (any subdirectory).
+- If exactly **1** candidate `.path` is found, it is used.
+- If exactly **2** candidates are found, the driver uses **`<base>_offset.path`**.
+- Any other number of candidates (**0** or **>2**) is treated as an error with a clear message.
+
+Example (base = `251219T040038_ROSA`):
+
+- `.../251219T040038_ROSA.sky`
+- `.../251219T040038_ROSA.path`
+- `.../251219T040038_ROSA_offset.path`
+
+In this case, the chosen `.path` is `251219T040038_ROSA_offset.path`.
+
+#### `.path` File Format (TSV)
+
+```
+Posix_time	ms	UTC	Azimuth	Elevation	Azimuth_raw	Elevation_raw	F0	F1
+1765683247	751	2025-12-14T03:34:07.751	-44.665	34.448	-4163087	3210824	1	3230_66
+1765683247	864	2025-12-14T03:34:07.864	-44.665	34.448	-4163091	3210823	1	3230_66
+...
+```
+
+**Columns:**
+- `Posix_time` - Unix timestamp (seconds)
+- `ms` - Milliseconds
+- `UTC` - ISO 8601 timestamp
+- `Azimuth` - Azimuth angle (degrees)
+- `Elevation` - Elevation angle (degrees)
+- `Azimuth_raw` - Raw encoder counts
+- `Elevation_raw` - Raw encoder counts
+- Additional metadata columns (optional)
+
+#### `.sky` File Format (TSV)
+
+**Single signal:**
+```
+Posix_time	ms	UTC	Signal
+1765683247	751	2025-12-14T03:34:07.751	1464866
+1765683247	864	2025-12-14T03:34:07.864	1522818
+...
+```
+
+**Multiple signals:**
+```
+Posix_time	ms	UTC	Signal0	Signal1
+1765683247	751	2025-12-14T03:34:07.751	1464866	1282954
+1765683247	864	2025-12-14T03:34:07.864	1522818	1346253
+...
+```
+
+**Columns:**
+- `Posix_time` - Unix timestamp (must match `.path` file)
+- `ms` - Milliseconds
+- `UTC` - ISO 8601 timestamp
+- `Signal` / `Signal0`, `Signal1`, ... - Power measurements
+
+**Note:** Use `--signal N` to select which column to use when multiple signals are present.
+
+#### Naming Conventions
+
+Scan files follow this naming pattern:
+
+```
+YYMMDDTHHMMSS_<SITE_CODE>.<ext>
+```
+
+Examples:
+- `250114T033407_OASI.path`
+- `250114T033407_OASI.sky`
+- `250115T121500_MZS.path`
+- `250115T121500_MZS.sky`
+
+**Excluded patterns:** Files matching `T\d{6}b` (e.g., `250101T210109bOASI`) are automatically skipped.
+
+---
+
+## Output Files
+
+### Offset TSV Files
+
+Generated by `generate_offsets.py` and saved to `offsets/<algo>.tsv`.
+
+**Format:**
+```
+azimuth	offset_az	offset_el	<algorithm-specific columns>
+45.2	0.123	-0.045	...
+46.1	0.119	-0.042	...
+...
+```
+
+**Common columns:**
+- `azimuth` - Azimuth angle (degrees)
+- `offset_az` - Azimuth offset (degrees, unless specified otherwise)
+- `offset_el` - Elevation offset (degrees, unless specified otherwise)
+
+Additional columns depend on the algorithm (e.g., timestamp, site code, peak power).
+
+### Model Files
+
+Generated by `generate_model.py` and saved to `models/`.
+
+#### Per-Axis Models
+
+- **`<stem>_az.joblib`** - Serialized azimuth model
+- **`<stem>_el.joblib`** - Serialized elevation model
+- **`<stem>_az.meta.json`** - Metadata for AZ model (backend kind, timestamp)
+- **`<stem>_el.meta.json`** - Metadata for EL model
+
+#### Unified Bundle
+
+- **`<stem>.joblib`** - Combined AZ+EL model
+- **`<stem>.meta.json`** - Bundle metadata
+
+#### Summary Files
+
+- **`<stem>_summary_az.txt`** - AZ fit statistics and Python code
+- **`<stem>_summary_el.txt`** - EL fit statistics and Python code
+
+**Example summary content:**
+```
+=== AZIMUTH POINTING MODEL (SUN_MAPS) ===
+Polynomial degree: 3
+Fourier harmonics: 2
+Number of data points: 245
+Outliers rejected (MAD > 2.5σ): 12
+
+Residual statistics:
+  Mean: 0.001°
+  Std: 0.023°
+  MAD: 0.015°
+  Min: -0.089°
+  Max: 0.095°
+
+Python function:
+def offset_az(azimuth_deg):
+    """Predict azimuth offset (degrees) at given azimuth."""
+    import numpy as np
+    az = np.deg2rad(azimuth_deg)
+    return (0.123 + 0.045*az + 0.012*az**2 - 0.003*az**3 +
+            0.008*np.sin(2*az) + 0.004*np.cos(2*az))
+```
+
+#### Plot Files
+
+- **`<stem>_az.png`** - Azimuth residual plot
+- **`<stem>_el.png`** - Elevation residual plot
+
+Plots show:
+- Raw offset data (scatter)
+- Fitted model (line)
+- Outliers (marked differently)
+- Residuals (lower panel)
+- Statistics box
+
+---
+
+## Python API Usage
+
+While the CLI tools cover most use cases, the Python API allows programmatic access to all functionality.
+
+### Example: Compute Offsets Programmatically
+
+```python
+from solaris_pointing.offsets.algos import sun_maps
+from types import SimpleNamespace
+
+# Configure parameters
+params = SimpleNamespace(
+    data="scans/",
+    outdir="offsets/",
+    site_lat=-74.6950,
+    site_lon=164.1000,
+    site_height=30.0,
+    frequency=100.0,
+    enable_refraction=True,
+    pressure=690,
+    temperature=-7,
+    signal=0
+)
+
+# Run algorithm
+sun_maps.run(params)
+```
+
+### Example: Fit Model Programmatically
+
+```python
+from solaris_pointing.models import model_1d
+import pandas as pd
+
+# Load offset data
+df = pd.read_csv("offsets/sun_maps.tsv", sep="\t")
+
+# Fit azimuth model
+model_az = model_1d.fit_model(
+    azimuths=df["azimuth"].values,
+    offsets=df["offset_az"].values,
+    degree=3,
+    zscore_threshold=2.5,
+    ridge_alpha=0.0,
+    fourier_k=2
+)
+
+# Save model
+model_1d.save_model("models/my_az.joblib", model_az)
+
+# Load and predict
+loaded_model = model_1d.load_model("models/my_az.joblib")
+offset_pred = model_1d.predict_offset(loaded_model, azimuth=45.0)
+print(f"Predicted offset at 45°: {offset_pred:.4f}°")
+```
+
+### Example: Load and Use a Model
+
+```python
+from solaris_pointing.models import model_1d
+
+# Load unified bundle
+bundle = model_1d.load_model("models/sun_maps.joblib")
+
+# Predict at specific azimuth
+az_offset, el_offset = model_1d.predict_offsets_deg(
+    bundle, azimuth=45.0
+)
+
+print(f"AZ offset: {az_offset:.4f}°")
+print(f"EL offset: {el_offset:.4f}°")
+```
+
+---
+
+## Testing
+
+### Run All Tests
+
+```bash
+pytest
+```
+
+### Run with Coverage
+
+```bash
+pytest --cov=solaris_pointing --cov-report=html
+```
+
+Coverage report will be in `htmlcov/index.html`.
+
+### Run Specific Test File
+
+```bash
+pytest tests/test_models.py
+```
+
+### Run Tests Across Python Versions (tox)
+
+```bash
+# Run all environments (lint, format-check, py312, py313)
+tox
+
+# Run specific environment
+tox -e py313
+
+# Run only linting
+tox -e lint
+
+# Run formatting check (CI-safe)
+tox -e format-check
+
+# Apply formatting locally
+tox -e format
+```
+
+### CI/CD
+
+The repository includes GitHub Actions workflows for:
+- **Continuous Integration** - Runs tests on Python 3.12 and 3.13
+- **Coverage reporting** - Uploads to Coveralls
+- **Linting** - Checks code style with Ruff
+
+---
+
+## Contributing
+
+Contributions are welcome! Please follow these guidelines:
+
+### Development Setup
+
+```bash
+# Fork and clone the repository
+git clone https://github.com/YOUR_USERNAME/solaris-pointing.git
+cd solaris-pointing
+
+# Install with development dependencies
+poetry install
+
+# Activate virtual environment
+poetry shell
+
+# Run tests to verify setup
+pytest
+```
+
+### Code Style
+
+This project uses **Ruff** for linting and formatting:
+
+```bash
+# Check linting
+tox -e lint
+
+# Check formatting (no changes)
+tox -e format-check
+
+# Apply formatting
+tox -e format
+```
+
+### Before Submitting a PR
+
+1. **Run the full test suite:** `tox`
+2. **Ensure coverage ≥95%:** `pytest --cov=solaris_pointing --cov-fail-under=95`
+3. **Check code style:** `tox -e lint && tox -e format-check`
+4. **Update documentation** if adding new features
+5. **Add tests** for new functionality
+
+### Reporting Issues
+
+Please include:
+- Python version
+- Operating system
+- Full error traceback
+- Minimal reproducible example
+- Expected vs. actual behavior
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### **Import errors after installation**
+
+```bash
+# Ensure package is installed in editable mode
+pip install -e .
+
+# Or reinstall with Poetry
+poetry install
+```
+
+#### **Missing `.path` or `.sky` files**
+
+Error: `No valid <map_id>.path / <map_id>.sky pairs found.`
+
+**Solution:** Verify that:
+- There is at least one `.sky` file under the `--data` directory (searched recursively).
+- For each `<base>.sky`, there are `.path` candidates whose filename starts with `<base>`:
+  - If there is exactly 1 candidate, it will be used.
+  - If there are exactly 2 candidates, an exact `<base>_offset.path` must exist (it will be used).
+  - If there are 0 or >2 candidates, the driver will stop with a clear error.
+- Files don't match exclusion pattern `T\d{6}b`.
+
+You may also see errors like:
+- `Ambiguous .path candidates (2 found), but the required offset filename is missing.`
+- `Ambiguous .path candidates (>2 found) for a single .sky base.`
+
+In these cases, fix the naming so the rule above produces exactly 1 candidate,
+or exactly 2 candidates including `<base>_offset.path`.
+
+#### **Date parsing failures**
+
+Error: `Cannot parse date from stem`
+
+**Solution:** Ensure file names follow format:
+- `YYMMDDTHHMMSS_<SITE>.<ext>` (preferred)
+- `YYMMDDTHHMMSS<SITE>.<ext>` (also supported)
+
+#### **Model prediction outside data range**
+
+Error: `Azimuth X.X outside observed range [Y.Y, Z.Z]`
+
+**Solution:** Use `--allow-extrapolation` flag (use with caution):
+```bash
+python scripts/generate_model.py predict model --azimuth 355 --allow-extrapolation
+```
+
+#### **Refraction calculation errors**
+
+Error: `pysolar refraction computation failed`
+
+**Solution:** Check that:
+- `--enable-refraction` is set
+- Meteo parameters are reasonable:
+  - Pressure: 500-1100 hPa
+  - Temperature: -50 to +50°C
+  - Humidity: 0.0-1.0
+
+#### **High residuals after fitting**
+
+**Diagnostic steps:**
+1. Check summary files for outlier count
+2. Adjust `--zscore` threshold (lower = more aggressive rejection)
+3. Increase `--degree` for more complex fits
+4. Add `--fourier-k` for periodic patterns
+5. Inspect plots for systematic trends
+
+#### **Memory issues with large datasets**
+
+**Solution:**
+- Process data in date-range chunks with `--date-start` / `--date-end`
+- Use TSV format (not in-memory dataframes)
+- Consider aggregating or downsampling data before fitting
+
+---
+
+## Algorithms
+
+### Current Algorithms
+
+#### `sun_maps`
+
+The default algorithm for solar pointing offset computation.
+
+**Method:**
+1. Load `.path` and `.sky` paired files
+2. Extract azimuth/elevation time series
+3. Extract power measurements (single or multi-signal)
+4. Identify Sun center via 2D Gaussian fitting or peak finding
+5. Compute offset as difference between commanded and measured position
+6. Apply optional refraction correction
+7. Apply fixed biases if configured
+8. Write results to TSV
+
+**Output columns:**
+- `azimuth` - Commanded azimuth (degrees)
+- `offset_az` - Azimuth offset (degrees)
+- `offset_el` - Elevation offset (degrees)
+- `map_id` - Scan identifier
+- `timestamp` - Observation time
+- `site_code` - Observatory code
+- Additional algorithm-specific metadata
+
+### Adding New Algorithms
+
+To implement a custom algorithm:
+
+1. Create `src/solaris_pointing/offsets/algos/my_algo.py`
+2. Implement required interface:
+   ```python
+   def run(params):
+       """Main entry point called by generate_offsets.py"""
+       pass
+   
+   def process_map(path_file, sky_file, params):
+       """Process a single scan pair, return offset dict"""
+       pass
+   ```
+3. Use the algorithm:
+   ```bash
+   python scripts/generate_offsets.py --algo my_algo --data scans/
+   ```
+
+---
+
+## Model Backends
+
+### Current Backends
+
+#### `model_1d`
+
+The default 1D polynomial + Fourier model for per-axis fitting.
+
+**Features:**
+- Polynomial base (degree 0-10)
+- Additive Fourier harmonics
+- MAD-based outlier rejection
+- Ridge regularization
+- Unwrapping for azimuth continuity
+
+**Mathematical form:**
+```
+offset(az) = Σ(c_i * az^i) + Σ(a_k*sin(2π*az/P_k) + b_k*cos(2π*az/P_k))
+```
+
+### Adding Custom Model Backends
+
+1. Create `src/solaris_pointing/models/model_<kind>.py`
+2. Implement required API functions (see `model_1d.py` for reference)
+3. Use with `--model <kind>` flag
+
+---
+
+## CI/CD Badges Explained
+
+- **CI Badge** - Shows whether automated tests pass on the `main` branch
+- **Coverage Badge** - Shows percentage of code covered by tests (target: ≥95%)
+- **Python Version Badge** - Indicates minimum Python version (3.12+)
+- **License Badge** - Displays project license (MIT)
+
+---
+
+## Roadmap
+
+Planned features and improvements:
+
+- [ ] Additional offset algorithms (cross-scan, drift scan)
+- [ ] 2D (azimuth-elevation coupled) model backends
+- [ ] Real-time offset monitoring dashboard
+- [ ] Automated quality metrics and alerts
+- [ ] Integration with telescope control systems
+- [ ] Support for other astronomical targets (planets, point sources)
+- [ ] Web-based visualization tools
+- [ ] Docker container for reproducible deployments
+
+---
+
+## Citation
+
+If you use Solaris Pointing in your research, please cite:
+
+```bibtex
+@software{solaris_pointing,
+  author = {Buttu, Marco},
+  title = {Solaris Pointing: Telescope Pointing Analysis for Millimetric Observatories},
+  year = {2025},
+  publisher = {GitHub},
+  url = {https://github.com/solaris-observatory/solaris-pointing}
+}
+```
+
+---
+
+## Acknowledgments
+
+Developed for the **Solaris Observatory** project.
+
+Special thanks to contributors and the solar radio astronomy community.
+
+---
+
+## License
+
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+---
+
+## Contact
+
+**Maintainer:** Marco Buttu (marco.buttu@inaf.it)
+
+**Repository:** https://github.com/solaris-observatory/solaris-pointing
+
+**Issues:** https://github.com/solaris-observatory/solaris-pointing/issues
+
+---
+
+**Happy observing! ☀️🔭**
