@@ -9,7 +9,7 @@
 
 ## Overview
 
-**Solaris Pointing** is a comprehensive Python toolkit for telescope pointing analysis and correction at millimetric observatories. It provides command-line tools and a Python API to:
+**Solaris Pointing** is a comprehensive Python toolkit for telescope pointing analysis and correction. It provides command-line tools and a Python API to:
 
 - **Compute solar pointing offsets** from Sun scan maps (`.path` + `.sky` pairs)
 - **Fit azimuth/elevation pointing models** (polynomial + Fourier harmonics)
