@@ -14,6 +14,7 @@
 - **Compute solar pointing offsets** from Sun scan maps (`.path` + `.sky` pairs)
 - **Fit azimuth/elevation pointing models** (polynomial + Fourier harmonics)
 - **Generate production-ready correction models** for telescope operations
+- **Use pointing models in telescope control software** (copy/paste summary functions or load `.joblib` bundles)
 - **Support multiple algorithms** for offset computation with pluggable architecture
 
 The package is designed for operational use in solar radio astronomy, particularly for 100 GHz observations requiring precise pointing calibration.
@@ -38,15 +39,13 @@ The package is designed for operational use in solar radio astronomy, particular
 - [Contributing](#contributing)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
-
 ---
 
 ## Features
 
 ### Offset Computation (`generate_offsets.py`)
 
-- ✅ **Recursive scan discovery** driven by `.sky`, pairing `.path` by filename prefix
-  (`<base>*.path`) with `<base>_offset.path` preferred when two candidates exist
+- ✅ **Recursive scan discovery** driven by `.sky`, pairing `.path` by filename prefix (`<base>*.path`) with `<base>_offset.path` preferred when two candidates exist
 - ✅ **Date-based filtering** via stem timestamps (`YYMMDDTHHMMSS`)
 - ✅ **Atmospheric refraction correction** (optional, via `pysolar`)
 - ✅ **Multi-signal support** for `.sky` files with multiple detector channels
@@ -148,6 +147,11 @@ python scripts/generate_offsets.py --data scans/ --algo sun_maps
 
 Each row contains: `azimuth`, `offset_az`, `offset_el`, plus algorithm-specific metadata.
 
+Important: `generate_offsets.py` appends results to the output TSV. If you run it twice with
+the same `--outdir` and `--algo`, the second run will add new rows to the existing file.
+Delete/rename the TSV (or use a different `--outdir`) if you want a clean file.
+
+
 ### 2. Fit Pointing Models
 
 ```bash
@@ -167,7 +171,19 @@ models/
 └── sun_maps.joblib            # Unified bundle
 ```
 
-### 3. Predict Offsets
+### 3. Use the Model in Telescope Code
+
+After you fit a model, you can integrate it in the pointing software in two ways:
+
+1. **Copy/paste the generated Python functions** (`az_offset(...)` / `el_offset(...)`) from the
+   per-axis summary files.
+2. **Load the serialized `.joblib` bundle** and call the model API at runtime.
+
+See: [Using the Pointing Model in Telescope Code](#using-the-pointing-model-in-telescope-code)
+
+---
+
+### 4. Predict Offsets
 
 ```bash
 python scripts/generate_model.py predict sun_maps --azimuth 45.0 --unit arcmin
@@ -260,7 +276,6 @@ python scripts/generate_offsets.py --data scans/ --algo sun_maps \
 **Using a configuration profile:**
 ```bash
 python scripts/generate_offsets.py --algo sun_maps --config mzs --data scans/
-python scripts/generate_offsets.py --algo sun_maps --config concordia --data scans/
 ```
 
 **Multi-signal selection:**
@@ -372,6 +387,97 @@ python scripts/generate_model.py merge sun_maps
 
 ---
 
+## Using the Pointing Model in Telescope Code
+
+This library covers the full lifecycle:
+
+1. **Identify offsets** from Sun scan pairs (`.path` + `.sky`) using `generate_offsets.py`.
+2. **Create a pointing model** from an offsets TSV using `generate_model.py fit`.
+3. **Use the model at runtime** to turn apparent coordinates into commanded coordinates.
+
+Below are two supported runtime integration options.
+
+### Option 1: Copy/Paste Functions from Summary Files
+
+When you run `generate_model.py fit`, the output directory contains per-axis summary files
+(e.g. `*_summary_az.txt` and `*_summary_el.txt`). Each summary includes a small, standalone
+Python function that computes the offset for that axis as a function of **apparent azimuth**.
+
+Typical function names in the summary files are:
+
+- `az_offset(az)`  → returns AZ offset in degrees
+- `el_offset(az)`  → returns EL offset in degrees
+
+**How to use (minimal dependency approach):**
+
+1. Open the summary files produced by the fit.
+2. Copy the entire `def az_offset(...):` and `def el_offset(...):` blocks into your pointing code.
+3. Apply the returned offsets to the apparent coordinates.
+
+Example integration:
+
+```python
+import math
+
+# Paste the two functions here:
+# - az_offset(az)
+# - el_offset(az)
+
+def apply_pointing_model(az_app_deg: float, el_app_deg: float) -> tuple[float, float]:
+    """Return commanded (az, el) by applying fitted offsets to apparent coordinates."""
+    off_az_deg = float(az_offset(az_app_deg))
+    off_el_deg = float(el_offset(az_app_deg))  # 1D model: EL offset depends on azimuth only
+
+    az_cmd_deg = (az_app_deg + off_az_deg) % 360.0
+    el_cmd_deg = el_app_deg + off_el_deg
+    return az_cmd_deg, el_cmd_deg
+```
+
+**Notes:**
+- The functions usually assume input azimuth in degrees in `[0, 360]` and embed any
+  linearization logic (e.g. a `CUT`) used during the fit.
+- Treat the pasted functions as generated artifacts: keep them versioned and tied to the
+  exact dataset/model you deployed.
+
+### Option 2: Load the `.joblib` Model Bundle
+
+Instead of copying code, you can load the serialized model bundle (`.joblib`) produced by the
+fit/merge workflow and predict offsets at runtime.
+
+The default backend is `model_1d` (a 1D azimuth-only predictor that outputs both AZ and EL
+offsets). The bundle contains the fitted coefficients and metadata (range checks, cut, etc.).
+
+Example integration:
+
+```python
+from solaris_pointing.models import model_1d
+
+class PointingOffsetModel:
+    def __init__(self, model_path: str, allow_extrapolation: bool = False) -> None:
+        # Load once at startup.
+        self.bundle = model_1d.load_model(model_path)
+        self.allow_extrapolation = allow_extrapolation
+
+    def apply(self, az_app_deg: float, el_app_deg: float) -> tuple[float, float]:
+        # Predict offsets in degrees (1D model: depends on azimuth only).
+        off_az_deg, off_el_deg = model_1d.predict_offsets_deg(
+            self.bundle,
+            az_deg=az_app_deg,
+            allow_extrapolation=self.allow_extrapolation,
+        )
+
+        az_cmd_deg = (az_app_deg + off_az_deg) % 360.0
+        el_cmd_deg = el_app_deg + off_el_deg
+        return az_cmd_deg, el_cmd_deg
+```
+
+**Notes:**
+- By default, predictions outside the observed azimuth range raise an error. If you
+  understand the risk, you can enable extrapolation (CLI: `--allow-extrapolation`).
+- The `.meta.json` sidecar written by the CLI is useful for deployment tracking.
+
+---
+
 ## Configuration Profiles
 
 Configuration profiles allow you to store commonly-used parameters in TOML files, avoiding repetitive command-line arguments.
@@ -434,6 +540,11 @@ python scripts/generate_offsets.py --algo sun_maps --config mzs --data scans/
 ## Input Data Format
 
 ### Scan Files
+
+Solaris Pointing expects paired files for each observation:
+
+1. **`.path` file** - Telescope pointing data (azimuth/elevation vs. time)
+2. **`.sky` file** - Power measurements from detector(s)
 
 Pairing is driven by the `.sky` file:
 
@@ -801,12 +912,12 @@ Error: `No valid <map_id>.path / <map_id>.sky pairs found.`
 - Files don't match exclusion pattern `T\d{6}b`.
 
 You may also see errors like:
+- `No .path file found for .sky base.`
 - `Ambiguous .path candidates (2 found), but the required offset filename is missing.`
 - `Ambiguous .path candidates (>2 found) for a single .sky base.`
 
 In these cases, fix the naming so the rule above produces exactly 1 candidate,
 or exactly 2 candidates including `<base>_offset.path`.
-
 #### **Date parsing failures**
 
 Error: `Cannot parse date from stem`
